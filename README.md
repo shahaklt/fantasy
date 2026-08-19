@@ -58,6 +58,36 @@ The first launch creates a virtualenv, installs dependencies, downloads roughly
 150 MB of nflverse data and runs the first simulation (about a minute on a
 modern desktop). The draft board is usable while that finishes.
 
+## Updating
+
+```bash
+./update.sh          # Windows: update.bat
+```
+
+Pulls the latest code and syncs dependencies **only if they changed**. Nothing
+re-downloads: your NFL data cache, league settings, saved credentials and tick
+database all live in gitignored directories (`data/cache`, `data/artifacts`,
+`data/user`) that git never touches.
+
+It refuses to run over uncommitted changes, and fast-forwards only — if your
+branch has diverged it tells you rather than guessing.
+
+By hand it is two commands:
+
+```bash
+git pull
+pip install -e ".[dev]"     # only needed when pyproject.toml changed
+```
+
+The package is installed editable, so code changes are live the moment you pull;
+pip only has to run when the dependency list itself moves. After a model change,
+rebuild the simulations — `gridiron build --sims 20000`, or press **Rebuild
+sims** in the web app. That re-runs the maths against data you already have.
+
+To update on a different branch: `BRANCH=main ./update.sh`.
+
+---
+
 ### Manual install
 
 ```bash
@@ -321,6 +351,8 @@ gridiron calibrate                      refit simulation constants
 gridiron board --position RB            print the draft board in the terminal
 gridiron doctor                         check GPU, data sources, venues, trading mode
 ```
+
+`./update.sh` updates an existing install in place without re-downloading data.
 
 ---
 
