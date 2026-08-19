@@ -15,12 +15,12 @@ if errorlevel 1 (
   python -m pip install -e ".[dev]"
 )
 
-python -c "import torch" 2>NUL
+python -c "import cupy" 2>NUL
 if errorlevel 1 (
   where nvidia-smi >NUL 2>&1
   if not errorlevel 1 (
-    echo ==^> NVIDIA GPU detected; installing CUDA build of torch
-    python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+    echo ==^> NVIDIA GPU detected; installing CuPy
+    python -m pip install cupy-cuda12x
   )
 )
 

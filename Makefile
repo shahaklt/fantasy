@@ -4,7 +4,7 @@ PY ?= python3
 
 help:
 	@echo "make setup       install dependencies (CPU)"
-	@echo "make setup-gpu   install dependencies with CUDA torch (RTX 3060 Ti)"
+	@echo "make setup-gpu   install dependencies with CuPy CUDA (RTX 3060 Ti)"
 	@echo "make run         start the web app at http://127.0.0.1:8000"
 	@echo "make refresh     pull the latest data"
 	@echo "make build       rebuild projections and simulations"
@@ -16,7 +16,7 @@ setup:
 	$(PY) -m pip install -e ".[dev]"
 
 setup-gpu: setup
-	$(PY) -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+	$(PY) -m pip install cupy-cuda12x
 
 run:
 	$(PY) -m gridiron.cli serve

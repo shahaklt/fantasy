@@ -53,6 +53,7 @@ class Backend:
     """Describes the array backend used by the Monte Carlo engine."""
 
     name: str  # "cuda" | "cpu-torch" | "numpy"
+    library: str = "numpy"  # which array library provides it
     device: str | None = None
     device_name: str = ""
     total_memory_gb: float = 0.0
@@ -64,7 +65,8 @@ class Backend:
 
     def describe(self) -> str:
         if self.is_gpu:
-            return f"CUDA · {self.device_name} · {self.total_memory_gb:.1f} GB VRAM"
+            return (f"CUDA ({self.library}) · {self.device_name} · "
+                    f"{self.total_memory_gb:.1f} GB VRAM")
         if self.name == "cpu-torch":
             return f"Torch CPU · {self.cpu_count} logical cores"
         return f"NumPy · {self.cpu_count} logical cores"
@@ -72,30 +74,58 @@ class Backend:
 
 @lru_cache(maxsize=1)
 def detect_backend() -> Backend:
-    """Pick the fastest available backend, honouring ``GRIDIRON_DEVICE``."""
+    """Pick the fastest available backend, honouring ``GRIDIRON_DEVICE``.
+
+    CuPy is tried before torch: it exposes NumPy's own API, so the simulation
+    code runs unchanged on it, and it installs at a fraction of torch's size.
+    """
     forced = os.environ.get("GRIDIRON_DEVICE", "auto").lower()
     if forced == "numpy":
         return Backend(name="numpy")
+
+    if forced in ("auto", "cuda", "cupy"):
+        try:
+            import cupy  # noqa: PLC0415
+
+            if cupy.cuda.runtime.getDeviceCount() > 0:
+                idx = cupy.cuda.runtime.getDevice()
+                props = cupy.cuda.runtime.getDeviceProperties(idx)
+                name = props["name"]
+                return Backend(
+                    name="cuda",
+                    library="cupy",
+                    device=f"cuda:{idx}",
+                    device_name=name.decode() if isinstance(name, bytes) else str(name),
+                    total_memory_gb=props["totalGlobalMem"] / 1024**3,
+                )
+        except Exception:  # noqa: BLE001 - no cupy, no driver, or no device
+            pass
+        if forced == "cupy":
+            raise RuntimeError("GRIDIRON_DEVICE=cupy but CuPy cannot reach a CUDA device")
+
     try:
-        import torch  # noqa: F401
+        import torch  # noqa: F401, PLC0415
     except Exception:
+        if forced == "cuda":
+            raise RuntimeError("GRIDIRON_DEVICE=cuda but neither CuPy nor torch is available")
         return Backend(name="numpy")
 
     import torch
 
-    if forced in ("cuda", "auto") and torch.cuda.is_available():
+    if forced in ("cuda", "auto", "torch") and torch.cuda.is_available():
         idx = torch.cuda.current_device()
         props = torch.cuda.get_device_properties(idx)
         return Backend(
             name="cuda",
+            library="torch",
             device=f"cuda:{idx}",
             device_name=props.name,
             total_memory_gb=props.total_memory / 1024**3,
         )
     if forced == "cuda":
         # Explicitly requested but unavailable -> be loud rather than silently slow.
-        raise RuntimeError("GRIDIRON_DEVICE=cuda but no CUDA device is visible to torch")
-    return Backend(name="cpu-torch", device="cpu")
+        raise RuntimeError("GRIDIRON_DEVICE=cuda but no CUDA device is visible")
+    return Backend(name="cpu-torch", library="torch", device="cpu")
 
 
 def sim_chunk_size(n_entities: int, backend: Backend | None = None) -> int:

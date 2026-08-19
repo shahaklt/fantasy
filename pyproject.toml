@@ -30,7 +30,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gpu = ["torch>=2.2"]
+# CuPy is the preferred GPU path: it exposes NumPy's API, so the simulation
+# code runs on it unchanged, and it installs far smaller than torch.
+gpu = ["cupy-cuda12x>=13.0"]      # CUDA 12.x runtime
+gpu-cuda11 = ["cupy-cuda11x>=13.0"]
+gpu-torch = ["torch>=2.2"]        # fallback device backend
 polymarket = ["py-clob-client>=0.17"]
 dev = ["pytest>=8.0", "pytest-cov", "httpx"]
 

@@ -323,11 +323,14 @@ class MonteCarloEngine:
         eff_sd = self.cal.efficiency_shock_sd if eff_sd is None else eff_sd
         conf = np.clip(self._role_conf, 0.0, 1.0)
         sd_role = role_sd_floor + role_sd_span * (1.0 - conf)
+        # Computed on whichever device the backend uses; copying to the host to
+        # call numpy's exp would cost two transfers per chunk for no reason.
+        sd = xp.asarray(sd_role)[None, :]
         z = xp.normal((n_sims, self.inp.n_players), 0.0, 1.0)
-        role = np.exp(xp.to_numpy(z) * sd_role[None, :] - 0.5 * sd_role[None, :] ** 2)
+        role = xp.exp(z * sd - 0.5 * sd * sd)
         z2 = xp.normal((n_sims, self.inp.n_players), 0.0, 1.0)
-        eff = np.exp(xp.to_numpy(z2) * eff_sd - 0.5 * eff_sd ** 2)
-        return xp.asarray(role), xp.asarray(eff)
+        eff = xp.exp(z2 * eff_sd - 0.5 * eff_sd ** 2)
+        return role, eff
 
     def simulate_week(self, week_pos: int, n_sims: int, active_state=None,
                       collect_stats: bool = False, role_shock=None,
@@ -529,15 +532,7 @@ class MonteCarloEngine:
 
     def _scatter_teams(self, dest, idx: np.ndarray, values):
         """Write (S, G) per-game values into the (S, T) team columns `idx`."""
-        xp = self.xp
-        if xp.kind == "torch":
-            t = xp.torch
-            index = t.as_tensor(np.asarray(idx), dtype=t.long, device=xp.device)
-            index = index[None, :].expand(values.shape[0], -1)
-            return dest.scatter(1, index, xp.asarray(values))
-        dest = np.asarray(dest).copy()
-        dest[:, idx] = np.asarray(values)
-        return dest
+        return self.xp.scatter_columns(dest, idx, values)
 
     def _kicker_points(self, team_points, n_sims: int):
         """Field goals scale with the team's scoring; PATs follow its touchdowns."""
@@ -630,7 +625,7 @@ class MonteCarloEngine:
             # that split is a season-level property, not weekly noise.
             base_logit = float(np.log(self.cal.pass_td_share / (1 - self.cal.pass_td_share)))
             logit = xp.normal((size, inp.n_teams), base_logit, self.cal.pass_td_share_logit_sd)
-            td_share_shock = xp.asarray(1.0 / (1.0 + np.exp(-xp.to_numpy(logit))))
+            td_share_shock = 1.0 / (1.0 + xp.exp(-logit))
 
             for wpos_i, wpos in enumerate(week_positions):
                 # Persistent injury state: absences last multiple weeks.

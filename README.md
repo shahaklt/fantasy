@@ -20,7 +20,7 @@ sources and, if you configure them, the trading venues.
 - Distributions, not point estimates: floor, ceiling, boom/bust rates, week-by-week
 - Team-level context from the published Vegas spread and total for all 272 games
 - Injury modelled as a persistent two-state chain, so seasons genuinely get lost
-- CUDA acceleration when torch sees your GPU; NumPy fallback otherwise
+- CUDA acceleration via CuPy (torch as a fallback); NumPy otherwise
 
 **Draft day**
 - VORP / VOLS baselines from your exact roster and scoring settings
@@ -63,15 +63,16 @@ modern desktop). The draft board is usable while that finishes.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pip install torch --index-url https://download.pytorch.org/whl/cu121   # optional, for CUDA
+pip install -e ".[gpu]"        # optional: CuPy for CUDA 12.x
 gridiron serve
 ```
 
 ### Getting the most out of a 12700K + RTX 3060 Ti
 
-`run.sh` installs the CUDA build of torch automatically when it sees
-`nvidia-smi`. Confirm the GPU is in use with `gridiron doctor` — the dashboard
-also shows the active backend.
+`run.sh` installs CuPy automatically when it sees `nvidia-smi`, picking the
+wheel that matches your driver's CUDA major version. Confirm the GPU is in use
+with `gridiron doctor`, which prints the device and its free VRAM; the dashboard
+shows the active backend too.
 
 With the GPU active, raise the simulation count well past the default:
 
@@ -79,13 +80,31 @@ With the GPU active, raise the simulation count well past the default:
 gridiron build --sims 100000      # ~8 GB VRAM handles this comfortably
 ```
 
-The engine chunks simulations to about 35% of VRAM and keeps every tensor on
-the device for the whole chunk. On CPU it targets ~2 GB of RAM per chunk and
-leans on multi-threaded BLAS. Useful knobs:
+The engine chunks simulations to about 35% of VRAM and keeps every array on the
+device for the whole chunk — the only transfer is the finished points matrix
+coming back. On CPU it targets ~2 GB of RAM per chunk and leans on
+multi-threaded BLAS.
+
+**Why CuPy rather than torch.** CuPy exposes NumPy's own API, so the simulation
+code is *the same code* on both paths — `ArrayBackend` is written against a
+module reference and `CuPyBackend` overrides three methods (`to_numpy`, `index`,
+`binomial`). There is no autograd machinery in the way, the install is a
+fraction of torch's size, and import is far quicker. A `TorchBackend` remains as
+a fallback for machines that already have torch and not CuPy; `make_backend`
+prefers CuPy, then torch, then NumPy, falling back rather than failing so a
+simulation always runs.
+
+Note that CuPy owns the Monte Carlo hot loop only. A blanket
+`import cupy as np` across the project would not work: `scipy.stats` and
+`scipy.optimize` (the analytic game model, devigging, blend-weight fitting)
+reject device arrays, Polars cannot build a frame from device memory, and JSON
+serialisation needs host memory. The quant layer also works on a few hundred
+elements at a time, where a kernel launch plus two transfers costs more than the
+arithmetic saves. The split is deliberate.
 
 | Variable | Effect |
 | --- | --- |
-| `GRIDIRON_DEVICE` | `auto` (default), `cuda`, `numpy` |
+| `GRIDIRON_DEVICE` | `auto` (default), `cupy`, `torch`, `cuda`, `numpy` |
 | `GRIDIRON_DATA_DIR` | where caches and artifacts live |
 | `GRIDIRON_TRADING_MODE` | `paper` (default) or `live` |
 | `GRIDIRON_DEMO_VENUE` | `1` adds a synthetic venue for testing the live tape |
@@ -323,7 +342,7 @@ src/gridiron/
   cli.py             command line
 web/                 single-page frontend (no build step, no CDN)
 scripts/             calibration and validation
-tests/               125 tests
+tests/               144 tests
 ```
 
 ## Tests
@@ -334,6 +353,13 @@ make test
 
 The API tests run against the real stack with a small simulation budget rather
 than mocks, and skip rather than fail when data is unavailable.
+
+Backend tests come in two halves. Contract tests run anywhere and prove
+`CuPyBackend` covers the whole interface with matching signatures — including a
+guard that it still inherits the shared maths rather than drifting into a second
+implementation. Parity tests then check distributional behaviour against every
+backend importable on the machine, so the CuPy path is exercised automatically
+on a box that has a GPU.
 
 ---
 
