@@ -143,6 +143,17 @@ arithmetic saves. The split is deliberate.
 
 ## Using it
 
+### Learn the numbers first
+
+**Stats Guide** (sidebar, or press <kbd>?</kbd>) documents all 38 stats the app
+shows: what each one is, how to read it, and the trap. It opens with four ideas
+the rest depends on, then a step-by-step draft-day order and the weekly
+in-season loop, then a filterable reference grouped by where the stat appears.
+
+If you read nothing else, read the four concepts at the top — most mistakes with
+this tool come from treating a projection as a prediction, or comparing points
+across positions.
+
 ### Set up your league first
 **Settings** → teams, scoring preset, roster slots, your draft slot → *Save &
 rebuild*. Everything downstream (replacement level, auction values, the
@@ -175,6 +186,21 @@ producing an enormous position.
 **Live Tape** streams order books and derives the microstructure signals.
 Sentiment usually shows up as persistent order-flow imbalance before it reaches
 the last-traded price.
+
+### Getting around
+
+| Key | Does |
+| --- | --- |
+| <kbd>⌘K</kbd> / <kbd>Ctrl K</kbd> | command palette — jump to any view, or search a player |
+| <kbd>Alt</kbd>+<kbd>1…9</kbd> | jump straight to a view |
+| <kbd>?</kbd> | open the Stats Guide |
+| <kbd>Esc</kbd> | close the drawer or palette |
+
+The strip under the header is a live machine readout: simulation state, run
+count, engine, scheduler, trading mode and venue count. Numeric columns shade
+themselves by percentile, so you can read the shape of a column without reading
+any single number in it, and the **Range** column draws each player's floor,
+median and ceiling on one rule.
 
 ---
 
@@ -373,6 +399,8 @@ src/gridiron/
   api/               FastAPI server
   cli.py             command line
 web/                 single-page frontend (no build step, no CDN)
+  assets/guide-data.js   the stats reference content
+  assets/guide.js        the Stats Guide view
 scripts/             calibration and validation
 tests/               144 tests
 ```

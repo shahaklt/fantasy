@@ -77,7 +77,7 @@ export function table(rows, cols, opts = {}) {
     const headCells = cols.map((c) => {
       const arrow = state.key === c.key ? (state.desc ? ' ↓' : ' ↑') : '';
       return el('th', {
-        class: c.cls,
+        class: (c.cls || '').includes('num') ? 'num' : c.cls,
         style: c.width ? `width:${c.width}` : null,
         onclick: () => {
           if (c.sortable === false) return;
@@ -90,8 +90,15 @@ export function table(rows, cols, opts = {}) {
     const thead = el('thead', {}, el('tr', {}, headCells));
 
     const tbody = el('tbody', {}, data.map((row) => {
-      const tr = el('tr', { class: opts.onRow ? 'clickable' : null },
-        cols.map((c) => el('td', { class: c.cls }, c.fmt ? c.fmt(row[c.key], row) : row[c.key] ?? '—')));
+      const cells = cols.map((c) => {
+        // cellAttrs lets a column shade itself by value (percentile heat).
+        const attrs = c.cellAttrs ? c.cellAttrs(row[c.key], row) : null;
+        const td = el('td', attrs || { class: c.cls },
+          c.fmt ? c.fmt(row[c.key], row) : row[c.key] ?? '—');
+        if (attrs && c.cls) td.className = `${attrs.class || ''} ${c.cls}`.trim();
+        return td;
+      });
+      const tr = el('tr', { class: opts.onRow ? 'clickable' : null }, cells);
       if (opts.onRow) tr.addEventListener('click', () => opts.onRow(row));
       return tr;
     }));
@@ -113,7 +120,7 @@ export function bar(value, max, label) {
 }
 
 // ------------------------------------------------------------------- charts
-const SVG = 'http://www.w3.org/2000/svg';
+export const SVG = 'http://www.w3.org/2000/svg';
 const svgEl = (tag, attrs = {}) => {
   const n = document.createElementNS(SVG, tag);
   for (const [k, v] of Object.entries(attrs)) if (v != null) n.setAttribute(k, v);
@@ -191,12 +198,89 @@ export function barChart(items, opts = {}) {
 }
 
 export function stat(label, value, sub) {
-  return el('div', { class: 'stat' },
-    el('span', { class: 'l' }, label),
-    el('span', { class: 'v' }, value),
-    sub ? el('span', { class: 's' }, sub) : null);
+  return gauge(label, value, sub);
 }
 
 export function kv(label, value) {
-  return el('div', { class: 'kv' }, el('span', { class: 'dim' }, label), el('b', {}, value));
+  return el('div', { class: 'metric' },
+    el('span', { class: 'k' }, label), el('span', { class: 'v' }, value));
+}
+
+// ---------------------------------------------------------------- panels
+/**
+ * A panel. Identity lives in the header bar, not in a floating uppercase
+ * label above the content — an eyebrow on every block is scaffolding, a bar
+ * is chrome that can also carry meta and controls.
+ */
+export function panel(title, body, opts = {}) {
+  const head = title || opts.meta || opts.actions
+    ? el('div', { class: 'panel-head' },
+        el('div', { class: 'panel-title' }, title || ''),
+        el('div', { class: 'panel-actions' },
+          opts.meta ? el('span', { class: 'panel-meta' }, opts.meta) : null,
+          ...(opts.actions || [])))
+    : null;
+  return el('div', { class: 'panel' }, head,
+    el('div', { class: `panel-body${opts.flush ? ' flush' : ''}` }, body));
+}
+
+/** Instrument readout: label, big value, sub-line, optional 0-1 gauge. */
+export function gauge(label, value, sub, fraction) {
+  return el('div', { class: 'gauge' },
+    el('div', { class: 'gauge-top' },
+      el('span', { class: 'gauge-label' }, label),
+      el('span', { class: 'gauge-value' }, value)),
+    sub ? el('span', { class: 'gauge-sub' }, sub) : null,
+    fraction != null
+      ? el('div', { class: 'gauge-track' },
+          el('div', { class: 'gauge-fill', style: `width:${Math.max(0, Math.min(1, fraction)) * 100}%` }))
+      : null);
+}
+
+export function metric(k, v, highlight) {
+  return el('div', { class: 'metric' },
+    el('span', { class: 'k' }, k),
+    el('span', { class: `v${highlight ? ' hi' : ''}` }, v));
+}
+
+export function led(state) {
+  return el('span', { class: `led ${state || ''}` });
+}
+
+/**
+ * Floor / median / ceiling on one rule. Scanning the column shows which
+ * players are safe and which are lottery tickets, which a mean alone hides.
+ */
+export function distBar(lo, mid, hi, min, max) {
+  const w = 74, h = 12;
+  const span = (max - min) || 1;
+  const x = (v) => Math.max(0, Math.min(1, (v - min) / span)) * (w - 2) + 1;
+  const svg = svgEl('svg', { width: w, height: h, viewBox: `0 0 ${w} ${h}`, class: 'dist' });
+  svg.append(svgEl('line', { x1: x(lo), y1: h / 2, x2: x(hi), y2: h / 2,
+    stroke: '#2b3a4d', 'stroke-width': 3 }));
+  svg.append(svgEl('line', { x1: x(lo), y1: 2, x2: x(lo), y2: h - 2,
+    stroke: '#7489a1', 'stroke-width': 1 }));
+  svg.append(svgEl('line', { x1: x(hi), y1: 2, x2: x(hi), y2: h - 2,
+    stroke: '#7489a1', 'stroke-width': 1 }));
+  svg.append(svgEl('circle', { cx: x(mid), cy: h / 2, r: 2.6, fill: '#3ddbd9' }));
+  return svg;
+}
+
+/**
+ * Shade a numeric cell by where its value sits in that column. Lets you read
+ * the shape of a column without reading any single number in it.
+ */
+export function heatCell(value, lo, hi, invert = false) {
+  const span = (hi - lo) || 1;
+  let t = Math.max(0, Math.min(1, (value - lo) / span));
+  if (invert) t = 1 - t;
+  const color = t > 0.5 ? '#3ddbd9' : '#fb7185';
+  const alpha = Math.abs(t - 0.5) * 2 * 0.22;
+  return { class: 'num heat', style: `--heat-c:${color};--heat-a:${alpha.toFixed(3)}` };
+}
+
+/** Column bounds, ignoring nulls, for heat shading. */
+export function bounds(rows, key) {
+  const vals = rows.map((r) => r[key]).filter((v) => v != null && !Number.isNaN(v));
+  return vals.length ? [Math.min(...vals), Math.max(...vals)] : [0, 1];
 }

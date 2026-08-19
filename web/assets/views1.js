@@ -1,5 +1,6 @@
 // Dashboard, Projections, Settings and My League views.
-import { $, api, bar, barChart, el, fmt, histogram, kv, posTag, sparkline, stat, table, toast } from './ui.js';
+import { $, api, bar, barChart, bounds, distBar, el, fmt, gauge, heatCell, histogram, kv,
+         led, metric, panel, posTag, sparkline, table, toast } from './ui.js';
 
 export const store = { status: null, league: null, board: [], week: 1 };
 
@@ -27,78 +28,75 @@ function positionFilter(onChange, value = 'ALL') {
 
 // ------------------------------------------------------------------ DASHBOARD
 export async function dashboard(root) {
-  root.replaceChildren(el('div', { class: 'empty' }, el('span', { class: 'loading' }), ' loading'));
+  root.replaceChildren(el('div', { class: 'empty' }, 'loading…'));
   const s = await api.get('/api/status');
   store.status = s;
   store.league = s.league;
 
   const meta = s.meta || {};
   const proj = meta.projection_summary || {};
-  const cards = el('div', { class: 'grid g4' },
-    el('div', { class: 'card' }, stat('Season', s.season, `${proj.players || 0} players projected`)),
-    el('div', { class: 'card' }, stat('Compute', s.compute.gpu ? 'GPU' : 'CPU', s.compute.backend)),
-    el('div', { class: 'card' }, stat('Simulations', fmt.i(meta.n_sims || 0), meta.built_at ? `built ${meta.built_at}` : 'not built yet')),
-    el('div', { class: 'card' }, stat('Trading', s.trading_mode.toUpperCase(),
-      s.risk?.kill_switch ? 'KILL SWITCH ON' : `daily $${fmt.n(s.risk?.daily_notional || 0, 0)} used`)));
-
   const sched = s.scheduler || {};
-  const schedCard = el('div', { class: 'card' },
-    el('div', { class: 'card-head' },
-      el('h3', {}, 'Auto-scrape schedule'),
-      el('div', { style: 'display:flex;gap:6px' },
-        el('span', { class: `pill ${sched.running ? 'ok' : 'off'}` }, sched.running ? 'running' : 'stopped'),
-        el('button', {
-          class: 'btn sm',
-          onclick: async () => {
-            await api.post(sched.running ? '/api/scheduler/stop' : '/api/scheduler/start');
+  const risk = s.risk || {};
+
+  const top = el('div', { class: 'grid g4' },
+    panel('Season', gauge('active', String(s.season), `${proj.players || 0} players projected`)),
+    panel('Compute', gauge('backend', s.compute.gpu ? 'GPU' : 'CPU', s.compute.backend)),
+    panel('Simulations', gauge('per player', fmt.i(meta.n_sims || 0),
+      meta.built_at ? `built ${meta.built_at}` : 'not built yet')),
+    panel('Trading', gauge('mode', s.trading_mode.toUpperCase(),
+      risk.kill_switch ? 'KILL SWITCH ENGAGED' : `$${fmt.n(risk.daily_notional || 0, 0)} of $${fmt.n(risk.limits?.max_daily_notional || 0, 0)} today`,
+      risk.limits?.max_daily_notional ? (risk.daily_notional || 0) / risk.limits.max_daily_notional : null)));
+
+  const schedPanel = panel('Auto-scrape',
+    el('div', {},
+      metric('runs daily at', (sched.times || []).join('  ·  '), true),
+      metric('next run', sched.next_run ? sched.next_run.replace('T', '  ') : '—'),
+      metric('jobs', String((sched.jobs || []).length)),
+      el('div', { style: 'display:flex;gap:6px;margin-top:12px;flex-wrap:wrap' },
+        (sched.jobs || []).map((j) => el('button', {
+          class: 'btn sm ghost',
+          onclick: async (e) => {
+            e.target.disabled = true; e.target.textContent = 'running';
+            try { const r = await api.post(`/api/scheduler/run/${j}`); toast(`${j}: ${r.ok ? 'ok' : 'failed'}`, !r.ok); }
+            catch (err) { toast(String(err), true); }
             dashboard(root);
           },
-        }, sched.running ? 'Stop' : 'Start'))),
-    kv('Runs daily at', (sched.times || []).join('  ·  ')),
-    kv('Next run', sched.next_run || '—'),
-    kv('Jobs', (sched.jobs || []).join(', ')),
-    el('div', { style: 'display:flex;gap:6px;margin-top:10px;flex-wrap:wrap' },
-      (sched.jobs || []).map((j) => el('button', {
-        class: 'btn sm ghost',
-        onclick: async (e) => {
-          e.target.disabled = true; e.target.textContent = 'running…';
-          try { const r = await api.post(`/api/scheduler/run/${j}`); toast(`${j}: ${r.ok ? 'done' : 'failed'}`, !r.ok); }
-          catch (err) { toast(String(err), true); }
-          dashboard(root);
-        },
-      }, `Run ${j}`))),
-    el('div', { style: 'margin-top:12px' },
-      el('h3', {}, 'Recent runs'),
+        }, j.replace(/_/g, ' ')))),
       (sched.history || []).length
-        ? table(sched.history, [
-            { key: 'job', label: 'Job' },
-            { key: 'started', label: 'Started' },
+        ? el('div', { style: 'margin-top:14px' }, table((sched.history || []).slice().reverse(), [
+            { key: 'job', label: 'Job', fmt: (v) => v.replace(/_/g, ' ') },
+            { key: 'started', label: 'Started', cls: 'dim', fmt: (v) => (v || '').replace('T', ' ') },
             { key: 'ok', label: 'Result', fmt: (v) => el('span', { class: v ? 'good' : 'bad' }, v ? 'ok' : 'failed') },
-            { key: 'detail', label: 'Detail', fmt: (v) => el('span', { class: 'dim' }, JSON.stringify(v).slice(0, 90)) },
-          ], { empty: 'No runs yet' })
-        : el('div', { class: 'note' }, 'No runs recorded yet.')));
+          ], { empty: 'No runs recorded' }))
+        : el('div', { class: 'note', style: 'margin-top:12px' }, 'No runs recorded yet.')),
+    { meta: sched.running ? 'running' : 'stopped',
+      actions: [led(sched.running ? 'on' : 'off'), el('button', {
+        class: 'btn sm',
+        onclick: async () => { await api.post(sched.running ? '/api/scheduler/stop' : '/api/scheduler/start'); dashboard(root); },
+      }, sched.running ? 'Stop' : 'Start')] });
 
-  const leagueCard = el('div', { class: 'card' },
-    el('h3', {}, 'League'),
-    kv('Name', s.league.name),
-    kv('Teams', s.league.teams),
-    kv('Scoring', s.league.scoring_preset),
-    kv('Roster', Object.entries(s.league.roster).map(([k, v]) => `${v}${k}`).join(' · ')),
-    kv('Your slot', s.league.draft_slot),
-    kv('Draft type', s.league.draft_type));
+  const leaguePanel = panel('League',
+    el('div', {},
+      metric('name', s.league.name),
+      metric('teams', String(s.league.teams)),
+      metric('scoring', s.league.scoring_preset),
+      metric('draft', `${s.league.draft_type} · slot ${s.league.draft_slot}`),
+      metric('roster', Object.entries(s.league.roster).map(([k, v]) => `${v}${k}`).join(' '))));
 
-  const venueCard = el('div', { class: 'card' },
-    el('h3', {}, 'Venues'),
-    ...(s.venues || []).map((v) => el('div', { class: 'kv' },
-      el('span', {}, v.venue),
-      el('span', { class: `pill ${v.authenticated ? 'ok' : ''}` }, v.authenticated ? 'authenticated' : 'read-only'))),
-    el('div', { class: 'note', style: 'margin-top:10px' },
-      'Read-only market data needs no credentials. Order placement stays in paper mode until you set '
-      + 'GRIDIRON_TRADING_MODE=live and confirm each order.'));
+  const venuePanel = panel('Venues',
+    el('div', {},
+      (s.venues || []).map((v) => el('div', { class: 'metric' },
+        el('span', { class: 'k' }, v.venue),
+        el('span', { class: 'v' },
+          el('span', { class: `pill ${v.authenticated ? 'ok' : ''}` },
+            v.authenticated ? 'authed' : 'read-only')))),
+      el('div', { class: 'note', style: 'margin-top:10px' },
+        'Market data needs no credentials. Orders stay in paper mode until you '
+        + 'start the server with GRIDIRON_TRADING_MODE=live and confirm each one.')));
 
-  root.replaceChildren(cards,
-    el('div', { class: 'grid g2', style: 'margin-top:14px' }, schedCard,
-      el('div', { class: 'grid', style: 'gap:14px;align-content:start' }, leagueCard, venueCard)));
+  root.replaceChildren(top,
+    el('div', { class: 'grid g2', style: 'margin-top:14px' }, schedPanel,
+      el('div', { class: 'grid', style: 'gap:14px;align-content:start' }, leaguePanel, venuePanel)));
 }
 
 // ---------------------------------------------------------------- PROJECTIONS
@@ -115,10 +113,16 @@ export async function projections(root) {
     if (state.search) q.set('search', state.search);
     const data = await api.get(`/api/players?${q}`);
     store.board = data.players;
-    body.replaceChildren(el('div', { class: 'card pad0' }, table(data.players, PLAYER_COLS, {
-      sortKey: 'proj_points', onRow: (r) => playerDrawer(r.player_id),
-      empty: 'No players match those filters',
-    })));
+    const rows = data.players;
+    const b = { pts: bounds(rows, 'proj_points'), vorp: bounds(rows, 'vorp'),
+                ppg: bounds(rows, 'proj_ppg'), g: bounds(rows, 'proj_games') };
+    const lo = Math.min(...rows.map((r) => r.p5 ?? 0));
+    const hi = Math.max(...rows.map((r) => r.p95 ?? 1));
+    body.replaceChildren(panel('Projections',
+      table(rows, playerCols(b, lo, hi), {
+        sortKey: 'proj_points', onRow: (r) => playerDrawer(r.player_id),
+        empty: 'No players match those filters',
+      }), { flush: true, meta: `${data.count} players` }));
   };
 
   controls.append(
@@ -130,19 +134,28 @@ export async function projections(root) {
   await load();
 }
 
-const PLAYER_COLS = [
-  { key: 'player_name', label: 'Player', fmt: (v, r) => el('span', {}, posTag(r.position), ' ', v) },
-  { key: 'team', label: 'Tm', cls: 'dim' },
-  { key: 'proj_points', label: 'Proj', cls: 'num', fmt: (v) => fmt.n(v, 1) },
-  { key: 'proj_ppg', label: 'PPG', cls: 'num', fmt: (v) => fmt.n(v, 1) },
-  { key: 'proj_games', label: 'G', cls: 'num', fmt: (v) => fmt.n(v, 1) },
-  { key: 'p5', label: 'Floor', cls: 'num dim', fmt: (v) => fmt.n(v, 0) },
-  { key: 'p95', label: 'Ceiling', cls: 'num dim', fmt: (v) => fmt.n(v, 0) },
-  { key: 'vorp', label: 'VORP', cls: 'num', fmt: (v) => el('span', { class: v > 0 ? 'good' : 'dim' }, fmt.n(v, 0)) },
-  { key: 'auction_value', label: '$', cls: 'num', fmt: (v) => fmt.money(v) },
-  { key: 'tier', label: 'Tier', cls: 'num', fmt: (v) => el('span', { class: 'tier' }, v ?? '—') },
-  { key: 'adp', label: 'ADP', cls: 'num dim', fmt: (v) => fmt.n(v, 1) },
-];
+/** Columns carry their own shading, so a scan down one tells you the shape. */
+function playerCols(b, distLo, distHi) {
+  return [
+    { key: 'player_name', label: 'Player', cls: 'name',
+      fmt: (v, r) => el('span', {}, posTag(r.position), ' ', v) },
+    { key: 'team', label: 'Tm', cls: 'dim' },
+    { key: 'proj_points', label: 'Proj', cls: 'num',
+      cellAttrs: (v) => heatCell(v, b.pts[0], b.pts[1]), fmt: (v) => fmt.n(v, 0) },
+    { key: 'proj_ppg', label: 'PPG', cls: 'num',
+      cellAttrs: (v) => heatCell(v, b.ppg[0], b.ppg[1]), fmt: (v) => fmt.n(v, 1) },
+    { key: 'proj_games', label: 'G', cls: 'num',
+      cellAttrs: (v) => heatCell(v, b.g[0], b.g[1]), fmt: (v) => fmt.n(v, 1) },
+    { key: 'p50', label: 'Range', sortable: false,
+      fmt: (v, r) => distBar(r.p5, r.p50 ?? r.proj_points, r.p95, distLo, distHi) },
+    { key: 'vorp', label: 'VORP', cls: 'num',
+      cellAttrs: (v) => heatCell(v, b.vorp[0], b.vorp[1]),
+      fmt: (v) => el('span', { class: v > 0 ? 'good' : 'dim' }, fmt.n(v, 0)) },
+    { key: 'auction_value', label: '$', cls: 'num', fmt: (v) => fmt.money(v) },
+    { key: 'tier', label: 'Tier', cls: 'num', fmt: (v) => el('span', { class: 'tier' }, v ?? '—') },
+    { key: 'adp', label: 'ADP', cls: 'num dim', fmt: (v) => fmt.n(v, 1) },
+  ];
+}
 
 export async function playerDrawer(playerId) {
   openDrawer(el('div', { class: 'empty' }, el('span', { class: 'loading' }), ' loading player'));
@@ -151,38 +164,41 @@ export async function playerDrawer(playerId) {
     const inputs = p.projection_inputs || {};
     const weekly = p.weekly || [];
     const node = el('div', {},
-      el('h2', { style: 'margin:0 0 4px' }, p.player_name),
-      el('div', { class: 'dim', style: 'margin-bottom:16px' },
-        `${p.position} · ${p.team} · tier ${p.tier ?? '—'} · ADP ${fmt.n(p.adp, 1)}`),
+      el('div', { style: 'margin-bottom:14px' },
+        el('h2', { style: 'margin:0 0 3px;font:600 20px/1.2 var(--sans)' }, p.player_name),
+        el('div', { class: 'note' },
+          `${p.position} · ${p.team} · tier ${p.tier ?? '—'} · ADP ${fmt.n(p.adp, 1)} · bye ${p.bye ?? '—'}`)),
       el('div', { class: 'grid g4', style: 'margin-bottom:16px' },
-        el('div', { class: 'card' }, stat('Projected', fmt.n(p.proj_points, 0), `${fmt.n(p.proj_ppg, 1)} per game`)),
-        el('div', { class: 'card' }, stat('Games', fmt.n(p.proj_games, 1), 'expected')),
-        el('div', { class: 'card' }, stat('VORP', fmt.n(p.vorp, 0), `auction ${fmt.money(p.auction_value)}`)),
-        el('div', { class: 'card' }, stat('Range', `${fmt.n(p.p5, 0)}–${fmt.n(p.p95, 0)}`, '90% interval'))),
-      el('div', { class: 'card', style: 'margin-bottom:14px' },
-        el('h3', {}, 'Season outcome distribution'),
-        histogram(p.distribution, { marker: p.proj_points })),
-      weekly.length ? el('div', { class: 'card', style: 'margin-bottom:14px' },
-        el('h3', {}, 'Week by week'),
-        sparkline(weekly.map((w) => w.mean), { height: 70, color: '#4fd1c5' }),
-        el('div', { class: 'note', style: 'margin-top:6px' },
-          `Weeks ${weekly[0].week}–${weekly[weekly.length - 1].week}; the dip is the bye.`)) : null,
+        panel(null, gauge('Projected', fmt.n(p.proj_points, 0), `${fmt.n(p.proj_ppg, 1)} per game`)),
+        panel(null, gauge('Games', fmt.n(p.proj_games, 1), 'expected')),
+        panel(null, gauge('VORP', fmt.n(p.vorp, 0), `auction ${fmt.money(p.auction_value)}`)),
+        panel(null, gauge('Range', `${fmt.n(p.p5, 0)}–${fmt.n(p.p95, 0)}`, '90% interval'))),
+      el('div', { style: 'margin-bottom:14px' }, panel('Season outcome distribution',
+        histogram(p.distribution, { marker: p.proj_points }),
+        { meta: `${fmt.n(p.p5, 0)} – ${fmt.n(p.p95, 0)} at 90%` })),
+      weekly.length
+        ? el('div', { style: 'margin-bottom:14px' },
+            panel('Week by week',
+              el('div', {},
+                sparkline(weekly.map((w) => w.mean), { height: 70, color: '#3ddbd9' }),
+                el('div', { class: 'note', style: 'margin-top:6px' },
+                  `Weeks ${weekly[0].week}–${weekly[weekly.length - 1].week}; the dip is the bye.`)),
+              { meta: `${weekly.length} weeks` }))
+        : null,
       el('div', { class: 'grid g2' },
-        el('div', { class: 'card' },
-          el('h3', {}, 'Projected usage'),
+        panel('Projected usage', el('div', {},
           kv('Target share', fmt.pct(inputs.target_share_proj)),
           kv('Carry share', fmt.pct(inputs.carry_share_proj)),
           kv('Dropback share', fmt.pct(inputs.dropback_share_proj)),
           kv('Targets / game', fmt.n(inputs.targets_pg_proj, 1)),
-          kv('Carries / game', fmt.n(inputs.carries_pg_proj, 1))),
-        el('div', { class: 'card' },
-          el('h3', {}, 'Efficiency & context'),
+          kv('Carries / game', fmt.n(inputs.carries_pg_proj, 1)))),
+        panel('Efficiency & context', el('div', {},
           kv('Yards per target', fmt.n(inputs.yards_per_target, 2)),
           kv('Catch rate', fmt.pct(inputs.catch_rate)),
           kv('Yards per carry', fmt.n(inputs.rush_ypc, 2)),
           kv('Role confidence', fmt.pct(inputs.role_confidence)),
           kv('Age', fmt.n(p.age, 1)),
-          kv('Bye week', p.bye ?? '—'))));
+          kv('Role', p.is_rookie ? 'rookie' : 'veteran')))));
     openDrawer(node);
   } catch (err) {
     openDrawer(el('div', { class: 'empty bad' }, String(err)));
@@ -296,9 +312,7 @@ export async function myLeague(root) {
       board.slice(0, 500).map((p) => el('option', { value: p.player_id },
         `${p.player_name} (${p.position} ${p.team})`)));
 
-    const left = el('div', { class: 'card' },
-      el('div', { class: 'card-head' }, el('h3', {}, `My roster (${mine.length})`),
-        el('button', { class: 'btn sm ghost', onclick: () => { rosterIds.length = 0; save(); render(); } }, 'Clear')),
+    const left = panel('My roster', el('div', {},
       el('div', { style: 'display:flex;gap:8px;margin-bottom:10px' }, picker,
         el('button', {
           class: 'btn sm', onclick: () => {
@@ -312,14 +326,16 @@ export async function myLeague(root) {
           el('button', { class: 'btn sm ghost', onclick: () => {
             rosterIds.splice(rosterIds.indexOf(p.player_id), 1); save(); render();
           } }, '✕'))))
-        : el('div', { class: 'note' }, 'Add players to see start/sit and playoff odds.'));
+        : el('div', { class: 'note' }, 'Add players to see start/sit and playoff odds.')),
+      { meta: `${mine.length} players`,
+        actions: [el('button', { class: 'btn sm ghost',
+          onclick: () => { rosterIds.length = 0; save(); render(); } }, 'Clear')] });
 
     const right = el('div', { class: 'grid', style: 'gap:14px;align-content:start' });
     if (mine.length >= 1) {
       const weekSel = el('select', { id: 'ls-week' },
         Array.from({ length: 18 }, (_, i) => el('option', { value: i + 1, selected: i + 1 === store.week ? 'selected' : null }, `Week ${i + 1}`)));
-      right.append(el('div', { class: 'card' },
-        el('div', { class: 'card-head' }, el('h3', {}, 'Start / sit'), weekSel,
+      right.append(panel('Start / sit', el('div', {}), { actions: [weekSel,
           el('button', {
             class: 'btn sm', onclick: async (e) => {
               e.target.disabled = true;
@@ -338,18 +354,17 @@ export async function myLeague(root) {
               } catch (err) { toast(String(err), true); }
               e.target.disabled = false;
             },
-          }, 'Optimise'))));
+          }, 'Optimise')] }));
 
       const total = mine.reduce((a, p) => a + (p.proj_points || 0), 0);
-      right.append(el('div', { class: 'card' },
-        el('h3', {}, 'Roster strength'),
+      right.append(panel('Roster strength', el('div', {},
         kv('Total projected points', fmt.n(total, 0)),
         kv('Best player', mine.slice().sort((a, b) => b.proj_points - a.proj_points)[0]?.player_name || '—'),
         el('div', { style: 'margin-top:10px' },
           barChart(mine.slice().sort((a, b) => b.proj_points - a.proj_points).slice(0, 10)
             .map((p) => ({ label: p.player_name, value: p.proj_points,
               color: { QB: '#a78bfa', RB: '#4ade80', WR: '#60a5fa', TE: '#fbbf24', K: '#f472b6', DST: '#94a3b8' }[p.position] })),
-            { fmt: (v) => fmt.n(v, 0) }))));
+            { fmt: (v) => fmt.n(v, 0) })))));
     }
     wrap.replaceChildren(el('div', { class: 'grid g2' }, left, right));
   };

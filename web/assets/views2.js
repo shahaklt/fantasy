@@ -1,5 +1,6 @@
 // Draft Room, Games, Markets and Live Tape views.
-import { $, api, barChart, el, fmt, histogram, kv, posTag, sparkline, stat, table, toast } from './ui.js';
+import { $, api, barChart, bounds, distBar, el, fmt, gauge, heatCell, histogram, kv,
+         led, metric, panel, posTag, sparkline, table, toast } from './ui.js';
 import { openDrawer, store } from './views1.js';
 
 // ---------------------------------------------------------------- DRAFT ROOM
@@ -27,15 +28,24 @@ export async function draft(root) {
     const nextPicks = board.my_next_picks || [];
     const availCol = nextPicks[1] ? `avail_at_${nextPicks[1]}` : null;
 
+    const vb = bounds(players, 'vorp');
+    const distLo = Math.min(...players.map((r) => r.p5 ?? 0));
+    const distHi = Math.max(...players.map((r) => r.p95 ?? 1));
     const cols = [
-      { key: 'player_name', label: 'Player', fmt: (v, r) => el('span', {}, posTag(r.position), ' ', v) },
+      { key: 'player_name', label: 'Player', cls: 'name',
+        fmt: (v, r) => el('span', {}, posTag(r.position), ' ', v) },
       { key: 'team', label: 'Tm', cls: 'dim' },
       { key: 'tier', label: 'Tier', cls: 'num', fmt: (v) => el('span', { class: 'tier' }, v ?? '—') },
       { key: 'proj_points', label: 'Proj', cls: 'num', fmt: (v) => fmt.n(v, 0) },
-      { key: 'vorp', label: 'VORP', cls: 'num', fmt: (v) => el('span', { class: v > 0 ? 'good' : 'dim' }, fmt.n(v, 0)) },
+      { key: 'p50', label: 'Range', sortable: false,
+        fmt: (v, r) => distBar(r.p5, r.p50 ?? r.proj_points, r.p95, distLo, distHi) },
+      { key: 'vorp', label: 'VORP', cls: 'num',
+        cellAttrs: (v) => heatCell(v, vb[0], vb[1]),
+        fmt: (v) => el('span', { class: v > 0 ? 'good' : 'dim' }, fmt.n(v, 0)) },
       { key: 'auction_value', label: '$', cls: 'num', fmt: (v) => fmt.money(v) },
       { key: 'adp', label: 'ADP', cls: 'num dim', fmt: (v) => fmt.n(v, 1) },
       availCol ? { key: availCol, label: `@${nextPicks[1]}`, cls: 'num',
+        cellAttrs: (v) => heatCell(v ?? 0, 0, 1),
         fmt: (v) => el('span', { class: v > 0.66 ? 'good' : v > 0.33 ? 'warn' : 'bad' }, fmt.pct(v, 0)) } : null,
       { key: 'player_id', label: '', sortable: false, fmt: (v) => el('button', {
           class: 'btn sm', onclick: async (e) => {
@@ -45,18 +55,27 @@ export async function draft(root) {
           } }, 'Draft') },
     ].filter(Boolean);
 
-    const header = el('div', { class: 'card', style: 'margin-bottom:14px' },
-      el('div', { class: 'card-head' },
-        el('div', { style: 'display:flex;gap:22px;align-items:center;flex-wrap:wrap' },
-          stat('Pick', `#${board.pick}`, `round ${Math.ceil(board.pick / (store.league?.teams || 12))}`),
-          stat('On the clock', `Team ${board.on_the_clock}`,
-            board.on_the_clock === board.my_slot ? 'that is you' : `you pick at #${nextPicks[0] ?? '—'}`),
-          stat('Your next picks', nextPicks.slice(0, 4).join(', ') || '—', `${board.drafted_count} players off the board`)),
-        el('div', { style: 'display:flex;gap:6px' },
-          el('button', { class: 'btn sm ghost', onclick: async () => { await api.post('/api/draft/undo'); render(); } }, 'Undo'),
-          el('button', { class: 'btn sm ghost', onclick: async () => {
-            if (confirm('Reset the draft?')) { await api.post('/api/draft/reset', {}); render(); } } }, 'Reset'),
-          el('button', { class: 'btn primary sm', onclick: (e) => recommend(e, rightCol) }, 'Recommend my pick'))));
+    const onClock = board.on_the_clock === board.my_slot;
+    const header = el('div', { class: 'grid', style: 'grid-template-columns:minmax(0,1fr) auto;gap:12px;margin-bottom:12px' },
+      panel('Draft state',
+        el('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px' },
+          gauge('overall pick', `#${board.pick}`,
+            `round ${Math.ceil(board.pick / (store.league?.teams || 12))}`),
+          gauge('on the clock', `T${board.on_the_clock}`,
+            onClock ? '▸ that is you' : `you pick at #${nextPicks[0] ?? '—'}`),
+          gauge('your next', nextPicks.slice(0, 3).join(' · ') || '—',
+            `${board.drafted_count} off the board`)),
+        { actions: [led(onClock ? 'busy' : 'on')] }),
+      panel('Actions',
+        el('div', { style: 'display:flex;flex-direction:column;gap:6px;min-width:180px' },
+          el('button', { class: 'btn primary', onclick: (e) => recommend(e, rightCol) }, 'Recommend my pick'),
+          el('div', { style: 'display:flex;gap:6px' },
+            el('button', { class: 'btn sm ghost', style: 'flex:1',
+              onclick: async () => { await api.post('/api/draft/undo'); render(); } }, 'Undo'),
+            el('button', { class: 'btn sm ghost', style: 'flex:1',
+              onclick: async () => {
+                if (confirm('Reset the draft?')) { await api.post('/api/draft/reset', {}); render(); }
+              } }, 'Reset')))));
 
     const controls = el('div', { class: 'controls' },
       el('div', { class: 'seg' }, ['ALL', 'QB', 'RB', 'WR', 'TE', 'K', 'DST'].map((p) =>
@@ -67,32 +86,31 @@ export async function draft(root) {
           render._t = setTimeout(render, 200); } }));
 
     leftCol.replaceChildren(header, controls,
-      el('div', { class: 'card pad0' }, table(players, cols, {
+      panel('Best available', table(players, cols, {
         sortKey: 'vorp', onRow: (r) => import('./views1.js').then((m) => m.playerDrawer(r.player_id)),
-        empty: 'Nobody left matching that filter' })));
+        empty: 'Nobody left matching that filter' }),
+        { flush: true, meta: `${players.length} available` }));
 
     // ---- right column: scarcity, my roster, recent picks
     const myRoster = (st.rosters?.[String(board.my_slot)] || []);
     rightCol.replaceChildren(
-      el('div', { class: 'card' },
-        el('h3', {}, 'Positional scarcity'),
+      panel('Positional scarcity', el('div', {},
         barChart(scarcity.map((s) => ({ label: `${s.position} · ${s.available} left`, value: s.drop_12,
           color: { QB: '#a78bfa', RB: '#4ade80', WR: '#60a5fa', TE: '#fbbf24', K: '#f472b6', DST: '#94a3b8' }[s.position] })),
           { fmt: (v) => fmt.n(v, 0) }),
         el('div', { class: 'note', style: 'margin-top:8px' },
-          'Points you lose by waiting 12 more picks at each position.')),
-      el('div', { class: 'card' },
-        el('h3', {}, `My roster (${myRoster.length})`),
+          'Points you lose by waiting 12 more picks at each position.'))),
+      panel('My roster', el('div', {},
         myRoster.length ? myRoster.map((p) => el('div', { class: 'roster-slot' },
           el('span', {}, posTag(p.position || '—'), ' ', p.player_name || p.player_id),
           el('span', { class: 'num' }, fmt.n(p.proj_points, 0))))
           : el('div', { class: 'note' }, 'No picks yet.')),
-      el('div', { class: 'card' },
-        el('h3', {}, 'Recent picks'),
+        { meta: `${myRoster.length} players` }),
+      panel('Recent picks', el('div', {},
         (st.picks || []).slice(-12).reverse().map((p) => el('div', { class: 'kv' },
           el('span', { class: 'dim' }, `#${p.pick} · T${p.team_slot}`),
           el('span', {}, p.player?.player_name || p.player?.player_id || '—')))
-        || el('div', { class: 'note' }, 'Draft has not started.')));
+        || el('div', { class: 'note' }, 'Draft has not started.'))));
   }
 
   async function recommend(evt, container) {
@@ -139,24 +157,50 @@ export async function games(root) {
   async function load() {
     body.replaceChildren(el('div', { class: 'empty' }, el('span', { class: 'loading' }), ' simulating the week'));
     const data = await api.get(`/api/games?week=${store.week}&n_sims=10000`);
-    const cards = data.games.map((g) => el('div', { class: 'card game-card',
-      onclick: () => gameDrawer(g.game_id, store.week) },
-      el('div', { style: 'display:flex;justify-content:space-between;align-items:baseline' },
-        el('div', {}, el('b', {}, g.away_team), el('span', { class: 'dim' }, ' at '), el('b', {}, g.home_team)),
-        el('span', { class: 'dim', style: 'font-size:11px' }, `W${g.week}`)),
-      el('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin:10px 0' },
-        el('span', { class: 'score' }, `${fmt.n(g.proj_away_score, 1)} – ${fmt.n(g.proj_home_score, 1)}`),
-        el('span', { class: 'pill' }, `${fmt.pct(Math.max(g.home_win_prob, g.away_win_prob), 0)} `
-          + `${g.home_win_prob > g.away_win_prob ? g.home_team : g.away_team}`)),
-      el('div', { class: 'kv' }, el('span', { class: 'dim' }, 'Market'),
-        el('b', {}, `${g.market_spread > 0 ? g.home_team : g.away_team} -${fmt.n(Math.abs(g.market_spread), 1)} · O/U ${fmt.n(g.market_total, 1)}`)),
-      el('div', { class: 'kv' }, el('span', { class: 'dim' }, 'Model edge'),
-        el('b', { class: Math.abs(g.spread_edge) > 1.5 ? 'good' : 'dim' },
-          `${fmt.signed(g.spread_edge, 1)} spread · ${fmt.signed(g.total_edge, 1)} total`)),
-      el('div', { class: 'kv' }, el('span', { class: 'dim' }, 'Over'),
-        el('b', {}, fmt.pct(g.over_prob, 0)))));
-    body.replaceChildren(el('div', { class: 'grid g3' }, cards));
+    const games = data.games;
+    const rows = games.map((g) => {
+      const edge = Math.abs(g.spread_edge) > 1.5 || Math.abs(g.total_edge) > 1.5;
+      const favTeam = g.home_win_prob > g.away_win_prob ? g.home_team : g.away_team;
+      const favProb = Math.max(g.home_win_prob, g.away_win_prob);
+      return el('div', { class: 'game-row', onclick: () => gameDrawer(g.game_id, store.week) },
+        el('div', {},
+          el('div', { class: 'matchup' },
+            el('b', {}, g.away_team), el('span', { class: 'at' }, '  at  '), el('b', {}, g.home_team),
+            edge ? el('span', { class: 'pill busy', style: 'margin-left:8px' }, 'edge') : null),
+          el('div', { class: 'note', style: 'font-family:var(--mono);font-size:10px;margin-top:3px' },
+            `line ${g.market_spread > 0 ? g.home_team : g.away_team} `
+            + `-${fmt.n(Math.abs(g.market_spread), 1)} · o/u ${fmt.n(g.market_total, 1)}`
+            + `   model ${fmt.signed(g.spread_edge, 1)} / ${fmt.signed(g.total_edge, 1)}`)),
+        el('div', { style: 'text-align:right' },
+          el('div', { class: 'score' },
+            `${fmt.n(g.proj_away_score, 1)}–${fmt.n(g.proj_home_score, 1)}`),
+          el('div', { class: 'note', style: 'font-family:var(--mono);font-size:10px;margin-top:3px' },
+            `${favTeam} ${fmt.pct(favProb, 0)} · over ${fmt.pct(g.over_prob, 0)}`)));
+    });
+
+    const totals = games.map((g) => g.proj_total);
+    body.replaceChildren(
+      el('div', { class: 'grid g4', style: 'margin-bottom:12px' },
+        panel('Slate', gauge('games', String(games.length), `week ${store.week}`)),
+        panel('Avg total', gauge('points', fmt.n(totals.reduce((a, b) => a + b, 0) / (totals.length || 1), 1),
+          `high ${fmt.n(Math.max(...totals), 1)} · low ${fmt.n(Math.min(...totals), 1)}`)),
+        (() => {
+          const top = games.slice().sort((a, b) => b.proj_total - a.proj_total)[0];
+          return panel('Highest total', gauge('shootout',
+            top ? `${top.away_team}@${top.home_team}` : '—',
+            top ? `${fmt.n(top.proj_total, 1)} pts — start everyone in it` : ''));
+        })(),
+        (() => {
+          const e = games.slice().sort((a, b) =>
+            Math.abs(b.spread_edge) - Math.abs(a.spread_edge))[0];
+          return panel('Biggest edge', gauge('vs market',
+            fmt.signed(e?.spread_edge || 0, 1),
+            e ? `${e.away_team}@${e.home_team} · points of spread` : ''));
+        })()),
+      panel('Matchups', el('div', {}, rows),
+        { flush: true, meta: 'click a game for the full breakdown' }));
   }
+
   await load();
 }
 
@@ -165,8 +209,7 @@ async function gameDrawer(gameId, week) {
   try {
     const d = await api.get(`/api/games/${gameId}?week=${week}&n_sims=10000`);
     const s = d.summary;
-    const teamCard = (b, label) => el('div', { class: 'card' },
-      el('h3', {}, `${label} · ${b.team}`),
+    const teamCard = (b, label) => panel(`${label} · ${b.team}`, el('div', {},
       kv('Fantasy points', fmt.n(b.totals.fantasy_points, 1)),
       kv('Passing yards', fmt.n(b.totals.passing_yards, 0)),
       kv('Rushing yards', fmt.n(b.totals.rushing_yards, 0)),
@@ -175,40 +218,42 @@ async function gameDrawer(gameId, week) {
       el('div', { style: 'margin-top:10px' },
         barChart(b.players.slice(0, 8).map((p) => ({ label: p.player_name, value: p.proj_points,
           color: { QB: '#a78bfa', RB: '#4ade80', WR: '#60a5fa', TE: '#fbbf24', K: '#f472b6', DST: '#94a3b8' }[p.position] })),
-          { fmt: (v) => fmt.n(v, 1) })));
+          { fmt: (v) => fmt.n(v, 1) }))));
 
     openDrawer(el('div', {},
-      el('h2', { style: 'margin:0 0 4px' }, `${s.away_team} at ${s.home_team}`),
-      el('div', { class: 'dim', style: 'margin-bottom:16px' },
-        `Week ${s.week} · market ${fmt.signed(s.market_spread, 1)} / ${fmt.n(s.market_total, 1)}`),
+      el('div', { style: 'margin-bottom:14px' },
+        el('h2', { style: 'margin:0 0 3px;font:600 20px/1.2 var(--sans)' },
+          `${s.away_team} at ${s.home_team}`),
+        el('div', { class: 'note' },
+          `Week ${s.week} · market ${fmt.signed(s.market_spread, 1)} / ${fmt.n(s.market_total, 1)}`)),
       el('div', { class: 'grid g4', style: 'margin-bottom:14px' },
-        el('div', { class: 'card' }, stat('Predicted', `${fmt.n(s.proj_away_score, 1)}–${fmt.n(s.proj_home_score, 1)}`, 'away – home')),
-        el('div', { class: 'card' }, stat('Total', fmt.n(s.proj_total, 1), `market ${fmt.n(s.market_total, 1)} · over ${fmt.pct(s.over_prob, 0)}`)),
-        el('div', { class: 'card' }, stat('Margin', fmt.signed(s.proj_margin, 1), `±${fmt.n(s.margin_sd, 1)} sd`)),
-        el('div', { class: 'card' }, stat('Home win', fmt.pct(s.home_win_prob, 1), `cover ${fmt.pct(s.home_cover_prob, 0)}`))),
+        panel(null, gauge('Predicted', `${fmt.n(s.proj_away_score, 1)}–${fmt.n(s.proj_home_score, 1)}`, 'away – home')),
+        panel(null, gauge('Total', fmt.n(s.proj_total, 1), `market ${fmt.n(s.market_total, 1)} · over ${fmt.pct(s.over_prob, 0)}`)),
+        panel(null, gauge('Margin', fmt.signed(s.proj_margin, 1), `±${fmt.n(s.margin_sd, 1)} sd`)),
+        panel(null, gauge('Home win', fmt.pct(s.home_win_prob, 1), `cover ${fmt.pct(s.home_cover_prob, 0)}`))),
       el('div', { class: 'grid g2', style: 'margin-bottom:14px' },
-        el('div', { class: 'card' }, el('h3', {}, 'Simulated total'),
-          histogram(d.distribution.total, { marker: s.market_total })),
-        el('div', { class: 'card' }, el('h3', {}, 'Simulated margin'),
-          histogram(d.distribution.margin, { marker: s.market_spread, color: '#63b3ed' }))),
+        panel('Simulated total', histogram(d.distribution.total, { marker: s.market_total }),
+          { meta: `sd ${fmt.n(s.total_sd, 1)}` }),
+        panel('Simulated margin', histogram(d.distribution.margin,
+          { marker: s.market_spread, color: '#7dd3fc' }), { meta: `sd ${fmt.n(s.margin_sd, 1)}` })),
       el('div', { class: 'grid g2', style: 'margin-bottom:14px' },
         teamCard(d.away_breakdown, 'Away'), teamCard(d.home_breakdown, 'Home')),
-      el('div', { class: 'card', style: 'margin-bottom:14px' },
-        el('h3', {}, 'Alternate lines'),
+      el('div', { style: 'margin-bottom:14px' }, panel('Alternate lines',
         el('div', { class: 'grid g2' },
           table(d.alt_lines.spreads, [
             { key: 'line', label: 'Spread', cls: 'num', fmt: (v) => fmt.signed(v, 1) },
             { key: 'home_cover', label: `${s.home_team} covers`, cls: 'num', fmt: (v) => fmt.pct(v, 1) }], {}),
           table(d.alt_lines.totals, [
             { key: 'line', label: 'Total', cls: 'num', fmt: (v) => fmt.n(v, 1) },
-            { key: 'over', label: 'Over', cls: 'num', fmt: (v) => fmt.pct(v, 1) }], {}))),
-      el('div', { class: 'card' },
-        el('h3', {}, 'Closed-form cross-check (Stern model)'),
-        kv('Home win probability', fmt.pct(d.analytic.home_win_prob, 1)),
-        kv('Implied volatility', fmt.n(d.analytic.implied_volatility, 2)),
-        el('div', { class: 'note', style: 'margin-top:8px' },
-          'The Brownian-motion model prices the same game analytically from the spread and total alone. '
-          + 'A large gap against the simulation usually means a lineup or usage assumption is doing the work.'))));
+            { key: 'over', label: 'Over', cls: 'num', fmt: (v) => fmt.pct(v, 1) }], {})))),
+      panel('Closed-form cross-check · Stern model',
+        el('div', {},
+          kv('Home win probability', fmt.pct(d.analytic.home_win_prob, 1)),
+          kv('Implied volatility', fmt.n(d.analytic.implied_volatility, 2)),
+          el('div', { class: 'note', style: 'margin-top:8px' },
+            'The Brownian-motion model prices the same game analytically from the spread and '
+            + 'total alone. A large gap against the simulation usually means a lineup or usage '
+            + 'assumption is doing the work.')))));
   } catch (err) {
     openDrawer(el('div', { class: 'empty bad' }, String(err)));
   }
@@ -224,17 +269,17 @@ export async function markets(root) {
     const [m, portfolio] = await Promise.all([api.get('/api/markets'), api.get('/api/portfolio')]);
 
     const venueCards = el('div', { class: 'grid g3' },
-      m.venues.map((v) => el('div', { class: 'card' },
-        el('div', { class: 'card-head' }, el('h3', {}, v.venue),
-          el('span', { class: `pill ${v.reachable ? 'ok' : 'off'}` }, v.reachable ? 'reachable' : 'unreachable')),
-        kv('Authenticated', v.authenticated ? 'yes' : 'read-only'),
-        v.reachable ? null : el('div', { class: 'note', style: 'margin-top:8px' }, v.detail))),
-      el('div', { class: 'card' },
-        el('h3', {}, 'Paper account'),
+      m.venues.map((v) => panel(v.venue,
+        el('div', {},
+          kv('authenticated', v.authenticated ? 'yes' : 'read-only'),
+          kv('markets', v.reachable ? 'live' : 'unavailable'),
+          v.reachable ? null : el('div', { class: 'note', style: 'margin-top:8px' }, v.detail)),
+        { actions: [led(v.reachable ? 'on' : 'off')] })),
+      panel('Paper account', el('div', {},
         kv('Cash', fmt.money(portfolio.paper.cash)),
         kv('Equity', fmt.money(portfolio.paper.equity)),
         kv('Open positions', portfolio.paper.positions.length),
-        kv('Mode', portfolio.mode)));
+        kv('mode', portfolio.mode))));
 
     const scanBtn = el('button', { class: 'btn primary', onclick: async (e) => {
       e.target.disabled = true; e.target.textContent = 'scanning…';
@@ -249,8 +294,7 @@ export async function markets(root) {
     const signalBox = el('div', { style: 'margin-top:14px' },
       el('div', { class: 'note' }, 'Run a scan to price every listed NFL contract against the simulation.'));
 
-    const tradesCard = el('div', { class: 'card', style: 'margin-top:14px' },
-      el('h3', {}, 'Trade log'),
+    const tradesCard = el('div', { style: 'margin-top:14px' }, panel('Trade log',
       table(portfolio.trades, [
         { key: 'ts', label: 'Time', fmt: (v) => fmt.time(v) },
         { key: 'mode', label: 'Mode', fmt: (v) => el('span', { class: v === 'live' ? 'warn' : 'dim' }, v) },
@@ -260,11 +304,11 @@ export async function markets(root) {
         { key: 'quantity', label: 'Qty', cls: 'num', fmt: (v) => fmt.i(v) },
         { key: 'price', label: 'Price', cls: 'num', fmt: (v) => fmt.n(v, 3) },
         { key: 'status', label: 'Status', cls: 'dim' },
-      ], { empty: 'No trades yet' }));
+      ], { empty: 'No trades yet' }), { flush: true }));
 
     wrap.replaceChildren(venueCards,
-      el('div', { class: 'card', style: 'margin-top:14px' },
-        el('div', { class: 'card-head' }, el('h3', {}, 'Model vs market'), scanBtn), signalBox),
+      el('div', { style: 'margin-top:14px' },
+        panel('Model vs market', signalBox, { actions: [scanBtn] })),
       tradesCard);
   }
 
@@ -341,21 +385,26 @@ export async function live(root) {
   function tile(m) {
     const hist = (m.history || []).map((h) => h.mid).filter((v) => v != null);
     const drift = hist.length > 1 ? hist[hist.length - 1] - hist[0] : 0;
-    return el('div', { class: 'card' },
-      el('div', { style: 'font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-        m.title || m.market_id),
-      el('div', { class: 'dim', style: 'font-size:11px;margin-bottom:8px' }, m.venue),
-      el('div', { style: 'display:flex;justify-content:space-between;align-items:baseline' },
-        el('span', { class: 'score' }, m.mid != null ? fmt.n(m.mid * 100, 1) + '¢' : '—'),
-        el('span', { class: drift >= 0 ? 'good' : 'bad', style: 'font-size:12px' },
-          `${drift >= 0 ? '▲' : '▼'} ${fmt.n(Math.abs(drift) * 100, 2)}¢`)),
-      sparkline(hist, { height: 46 }),
-      el('div', { style: 'margin-top:8px' },
-        kv('Micro-price', m.micro_price != null ? `${fmt.n(m.micro_price * 100, 2)}¢` : '—'),
-        kv('Spread', m.spread != null ? `${fmt.n(m.spread * 100, 1)}¢` : '—'),
-        kv('Book imbalance', fmt.n(m.imbalance, 3)),
-        kv('Momentum (z)', fmt.n(m.momentum, 2)),
-        kv('Realised vol', fmt.n((m.realised_vol || 0) * 100, 3))));
+    const skew = m.imbalance || 0;
+    return panel(m.title || m.market_id,
+      el('div', {},
+        el('div', { style: 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px' },
+          el('span', { class: 'score' }, m.mid != null ? `${fmt.n(m.mid * 100, 1)}¢` : '—'),
+          el('span', { class: drift >= 0 ? 'good' : 'bad', style: 'font:11px/1 var(--mono)' },
+            `${drift >= 0 ? '▲' : '▼'} ${fmt.n(Math.abs(drift) * 100, 2)}¢`)),
+        sparkline(hist, { height: 40, color: drift >= 0 ? '#4ade80' : '#fb7185' }),
+        el('div', { style: 'margin-top:8px' },
+          metric('micro-price', m.micro_price != null ? `${fmt.n(m.micro_price * 100, 2)}¢` : '—',
+            m.micro_price > m.mid),
+          metric('spread', m.spread != null ? `${fmt.n(m.spread * 100, 1)}¢` : '—'),
+          metric('book imbalance', fmt.n(skew, 3)),
+          el('div', { class: 'gauge-track', style: 'margin:2px 0 8px' },
+            el('div', { class: 'gauge-fill',
+              style: `width:${Math.abs(skew) * 50}%;margin-left:${skew < 0 ? 50 - Math.abs(skew) * 50 : 50}%;`
+                + `background:${skew >= 0 ? 'var(--good)' : 'var(--bad)'}` })),
+          metric('momentum z', fmt.n(m.momentum, 2), Math.abs(m.momentum) > 2),
+          metric('realised vol', fmt.n((m.realised_vol || 0) * 100, 3)))),
+      { meta: m.venue });
   }
 
   try {
