@@ -92,13 +92,36 @@ def doctor():
 
     backend = detect_backend()
     console.print(f"[bold]Compute[/]: {backend.describe()}")
+
+    found = False
+    try:
+        import cupy
+
+        n = cupy.cuda.runtime.getDeviceCount()
+        console.print(f"  cupy {cupy.__version__}, CUDA devices: {n}")
+        for i in range(n):
+            props = cupy.cuda.runtime.getDeviceProperties(i)
+            name = props["name"]
+            name = name.decode() if isinstance(name, bytes) else str(name)
+            free, total = cupy.cuda.Device(i).mem_info
+            console.print(f"    [{i}] {name} — {total / 1024**3:.1f} GB "
+                          f"({free / 1024**3:.1f} GB free)")
+        found = n > 0
+    except ImportError:
+        console.print("  [yellow]cupy not installed[/]  ->  pip install cupy-cuda12x")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"  [yellow]cupy present but no usable device: {exc}[/]")
+
     try:
         import torch
 
         console.print(f"  torch {torch.__version__}, cuda available: {torch.cuda.is_available()}")
+        found = found or torch.cuda.is_available()
     except ImportError:
-        console.print("  [yellow]torch not installed — GPU acceleration unavailable[/]")
-        console.print("  install with: pip install torch --index-url https://download.pytorch.org/whl/cu121")
+        console.print("  torch not installed (optional fallback backend)")
+
+    if not found:
+        console.print("  [yellow]running on CPU — simulations will be slower[/]")
 
     table = Table("check", "status")
     checks = [

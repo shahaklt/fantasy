@@ -1,10 +1,11 @@
-.PHONY: help setup setup-gpu run refresh build validate calibrate test lint clean
+.PHONY: help setup setup-gpu update run refresh build validate calibrate test lint clean
 
 PY ?= python3
 
 help:
 	@echo "make setup       install dependencies (CPU)"
-	@echo "make setup-gpu   install dependencies with CUDA torch (RTX 3060 Ti)"
+	@echo "make setup-gpu   install dependencies with CuPy CUDA (RTX 3060 Ti)"
+	@echo "make update      pull the latest code, keeping your downloaded data"
 	@echo "make run         start the web app at http://127.0.0.1:8000"
 	@echo "make refresh     pull the latest data"
 	@echo "make build       rebuild projections and simulations"
@@ -16,7 +17,10 @@ setup:
 	$(PY) -m pip install -e ".[dev]"
 
 setup-gpu: setup
-	$(PY) -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+	$(PY) -m pip install cupy-cuda12x
+
+update:
+	./update.sh
 
 run:
 	$(PY) -m gridiron.cli serve

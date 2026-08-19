@@ -19,10 +19,16 @@ if ! python -c "import gridiron" 2>/dev/null; then
   pip install -e ".[dev]"
 fi
 
-if [ "${GPU:-auto}" != "off" ] && ! python -c "import torch" 2>/dev/null; then
+if [ "${GPU:-auto}" != "off" ] && ! python -c "import cupy" 2>/dev/null; then
   if command -v nvidia-smi >/dev/null 2>&1; then
-    echo "==> NVIDIA GPU detected; installing CUDA build of torch"
-    pip install torch --index-url https://download.pytorch.org/whl/cu121
+    echo "==> NVIDIA GPU detected; installing CuPy"
+    # CuPy ships per-CUDA-major wheels; pick from the driver's reported version.
+    CUDA_MAJOR=$(nvidia-smi | grep -oE "CUDA Version: [0-9]+" | grep -oE "[0-9]+$" || echo 12)
+    if [ "$CUDA_MAJOR" -ge 12 ] 2>/dev/null; then
+      pip install cupy-cuda12x || echo "==> CuPy install failed; continuing on CPU"
+    else
+      pip install cupy-cuda11x || echo "==> CuPy install failed; continuing on CPU"
+    fi
   fi
 fi
 
