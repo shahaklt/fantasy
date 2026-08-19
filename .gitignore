@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+.DS_Store
+.idea/
+.vscode/
+
+# Local data: caches, simulation artifacts, credentials, tick database
+data/cache/
+data/artifacts/
+data/user/
+*.parquet
+*.db
+*.db-wal
+*.db-shm
+
+# Never commit key material
+*.pem
+*.key
+kalshi_credentials.json
+polymarket_credentials.json

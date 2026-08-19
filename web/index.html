@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gridiron</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏈</text></svg>" />
+<link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">🏈</span><div><b>Gridiron</b><small id="brand-season">—</small></div></div>
+    <nav id="nav">
+      <button data-view="dashboard" class="active"><i>◆</i>Dashboard</button>
+      <button data-view="projections"><i>▤</i>Projections</button>
+      <button data-view="draft"><i>✦</i>Draft Room</button>
+      <button data-view="games"><i>◈</i>Games</button>
+      <button data-view="markets"><i>⇄</i>Markets</button>
+      <button data-view="live"><i>◉</i>Live Tape</button>
+      <button data-view="league"><i>♛</i>My League</button>
+      <button data-view="settings"><i>⚙</i>Settings</button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="chip" id="chip-backend">compute —</div>
+      <div class="chip" id="chip-mode">mode —</div>
+      <div class="chip" id="chip-built">built —</div>
+    </div>
+  </aside>
+  <main id="main">
+    <header class="topbar">
+      <div id="crumb">Dashboard</div>
+      <div class="topbar-actions">
+        <span id="toast" class="toast"></span>
+        <button id="btn-refresh" class="btn ghost">Refresh data</button>
+        <button id="btn-rebuild" class="btn primary">Rebuild sims</button>
+      </div>
+    </header>
+    <section id="view"></section>
+  </main>
+</div>
+<div id="drawer" class="drawer"><div class="drawer-inner"><button id="drawer-close" class="drawer-close">✕</button><div id="drawer-body"></div></div></div>
+<script type="module" src="/assets/app.js"></script>
+</body>
+</html>

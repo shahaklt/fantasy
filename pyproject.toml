@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gridiron"
+version = "1.0.0"
+description = "Monte Carlo fantasy football projection, simulation and draft-day engine"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "polars>=1.0",
+    "pyarrow>=15",
+    "pandas>=2.0",
+    "scipy>=1.11",
+    "requests>=2.31",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "python-multipart>=0.0.9",
+    "rich>=13.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+gpu = ["torch>=2.2"]
+dev = ["pytest>=8.0", "pytest-cov", "httpx"]
+
+[project.scripts]
+gridiron = "gridiron.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning"]
