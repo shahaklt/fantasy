@@ -24,7 +24,16 @@ export async function espn(root) {
     panel('Actions', el('div', { style: 'display:flex;flex-direction:column;gap:6px' },
       el('button', { class: 'btn primary', onclick: (e) => runSync(e, root) }, 'Sync my league'),
       el('button', { class: 'btn ghost sm', onclick: (e) => runCompare(e, body) }, 'Compare projections'),
-      el('button', { class: 'btn ghost sm', onclick: (e) => runScorecard(e, body) }, 'Score vs actuals'))));
+      el('button', { class: 'btn ghost sm', onclick: (e) => runScorecard(e, body) }, 'Score vs actuals'),
+      el('button', { class: 'btn ghost sm', onclick: (e) => runRoster(e, body) }, 'My roster vs ESPN'),
+      el('div', { style: 'display:flex;gap:6px' },
+        el('select', { id: 'espn-week' },
+          Array.from({ length: 18 }, (_, i) => el('option', {
+            value: i + 1,
+            selected: (status.current_week || 1) - 1 === i + 1 ? 'selected' : null,
+          }, `Wk ${i + 1}`))),
+        el('button', { class: 'btn ghost sm', style: 'flex:1',
+          onclick: (e) => runWeek(e, body) }, 'Week detail')))));
 
   const body = el('div', { class: 'grid', style: 'gap:12px' },
     panel('Start here', el('div', { class: 'note' },
@@ -308,4 +317,88 @@ async function runSync(evt, root) {
     if (host) host.replaceChildren(detail, ...(warn ? [warn] : []));
   } catch (err) { toast(String(err), true); }
   btn.disabled = false; btn.textContent = 'Sync my league';
+}
+
+// ------------------------------------------------------- my roster vs ESPN
+async function runRoster(evt, body) {
+  const btn = evt.target;
+  btn.disabled = true; btn.textContent = 'loading';
+  try {
+    const d = await api.post('/api/espn/roster', {});
+    const sum = d.summary || {};
+    if (!d.players?.length) {
+      body.replaceChildren(panel('No roster matched', el('div', { class: 'note' },
+        'Sync your league first and pick which team is yours.')));
+      btn.disabled = false; btn.textContent = 'My roster vs ESPN';
+      return;
+    }
+    body.replaceChildren(
+      el('div', { class: 'grid g4' },
+        panel('Your players', gauge('matched', `${sum.matched}/${sum.roster_size}`,
+          'on both boards')),
+        panel('Our total', gauge('ppg', fmt.n(sum.gridiron_total_ppg, 1), 'across the roster')),
+        panel('ESPN total', gauge('ppg', fmt.n(sum.espn_total_ppg, 1), 'across the roster')),
+        panel('Net view', gauge('delta', fmt.signed(sum.delta_ppg, 1),
+          `${sum.undervalued_by_espn} undervalued · ${sum.overvalued_by_espn} overvalued`))),
+      el('div', { style: 'margin-top:12px' },
+        panel('Player by player', table(d.players, [
+          { key: 'player_name', label: 'Player', cls: 'name',
+            fmt: (v, r) => el('span', {}, posTag(r.position), ' ', v) },
+          { key: 'team', label: 'Tm', cls: 'dim' },
+          { key: 'proj_ppg', label: 'Ours', cls: 'num', fmt: (v) => fmt.n(v, 1) },
+          { key: 'espn_proj_avg', label: 'ESPN', cls: 'num', fmt: (v) => fmt.n(v, 1) },
+          { key: 'delta_ppg', label: 'Δ', cls: 'num',
+            fmt: (v) => el('span', { class: v > 0 ? 'good' : 'bad' }, fmt.signed(v, 1)) },
+          { key: 'proj_games', label: 'G', cls: 'num dim', fmt: (v) => fmt.n(v, 1) },
+        ], { sortKey: 'delta_ppg' }), { flush: true,
+          meta: 'where ESPN under- and over-rates your own players' })),
+      el('div', { style: 'margin-top:12px' },
+        panel('Why this matters', el('div', { class: 'note' },
+          'Players ESPN rates below us are the ones your league-mates will accept least for '
+          + 'in a trade. Players ESPN rates above us are the ones to sell while the room '
+          + 'still believes the number on their screen.'))));
+    toast(`${sum.matched} of your players compared`);
+  } catch (err) { toast(String(err), true); }
+  btn.disabled = false; btn.textContent = 'My roster vs ESPN';
+}
+
+// ----------------------------------------------------------- one-week detail
+async function runWeek(evt, body) {
+  const btn = evt.target;
+  const week = Number(document.getElementById('espn-week')?.value || 1);
+  btn.disabled = true; btn.textContent = 'loading';
+  try {
+    const d = await api.get(`/api/espn/week/${week}?n_sims=4000`);
+    const card = d.scorecard || {};
+    const played = card.scored > 0;
+
+    body.replaceChildren(
+      el('div', { class: 'grid g4' },
+        panel('Week', gauge('number', String(d.week), `${d.n} players compared`)),
+        panel('Status', gauge('games', played ? 'PLAYED' : 'UPCOMING',
+          played ? `${card.scored} scored` : 'projections only')),
+        played ? panel('Ours', gauge('mae', fmt.n(card.gridiron?.mae, 2), 'mean absolute error'))
+               : panel('Ours', gauge('mae', '—', 'available after the games')),
+        played ? panel('ESPN', gauge('mae', fmt.n(card.espn?.mae, 2), 'mean absolute error'))
+               : panel('ESPN', gauge('mae', '—', 'available after the games'))),
+      el('div', { style: 'margin-top:12px' },
+        panel(`Week ${d.week} player by player`, table(d.players || [], [
+          { key: 'player_name', label: 'Player', cls: 'name',
+            fmt: (v, r) => el('span', {}, posTag(r.position || 'WR'), ' ', v) },
+          { key: 'slot', label: 'Slot', cls: 'dim' },
+          { key: 'fantasy_team', label: 'Rostered by', cls: 'dim' },
+          { key: 'gridiron_proj', label: 'Ours', cls: 'num', fmt: (v) => fmt.n(v, 1) },
+          { key: 'espn_week_proj', label: 'ESPN', cls: 'num', fmt: (v) => fmt.n(v, 1) },
+          { key: 'delta', label: 'Δ', cls: 'num',
+            fmt: (v) => el('span', { class: v > 0 ? 'good' : 'bad' }, fmt.signed(v, 1)) },
+          played ? { key: 'espn_week_actual', label: 'Actual', cls: 'num',
+            fmt: (v) => el('span', { class: 'warn' }, fmt.n(v, 1)) } : null,
+          played ? { key: 'closer', label: 'Closer',
+            fmt: (v) => el('span', { class: v === 'gridiron' ? 'good' : v === 'espn' ? 'bad' : 'dim' },
+              v || '—') } : null,
+        ].filter(Boolean), { sortKey: played ? 'espn_week_actual' : 'delta', flush: true }),
+          { flush: true, meta: played ? 'actuals included' : 'projections only so far' })));
+    toast(`week ${d.week}: ${d.n} players`);
+  } catch (err) { toast(String(err), true); }
+  btn.disabled = false; btn.textContent = 'Week detail';
 }

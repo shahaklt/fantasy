@@ -75,7 +75,24 @@ export async function draft(root) {
             el('button', { class: 'btn sm ghost', style: 'flex:1',
               onclick: async () => {
                 if (confirm('Reset the draft?')) { await api.post('/api/draft/reset', {}); render(); }
-              } }, 'Reset')))));
+              } }, 'Reset')),
+          // A draft that already happened on ESPN should not be re-entered by hand.
+          el('button', {
+            class: 'btn sm ghost',
+            onclick: async (e) => {
+              e.target.disabled = true; e.target.textContent = 'importing';
+              try {
+                const r = await api.post('/api/espn/sync', {
+                  settings: false, roster: false, schedule: false, draft: true });
+                const d = (r.imported || {}).draft || {};
+                toast(d.recorded
+                  ? `imported ${d.recorded} picks from ESPN`
+                  : (d.note || 'nothing to import'), !d.recorded);
+                render();
+              } catch (err) { toast(String(err), true); }
+              e.target.disabled = false; e.target.textContent = 'Import ESPN draft';
+            },
+          }, 'Import ESPN draft'))));
 
     const controls = el('div', { class: 'controls' },
       el('div', { class: 'seg' }, ['ALL', 'QB', 'RB', 'WR', 'TE', 'K', 'DST'].map((p) =>

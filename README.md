@@ -177,6 +177,11 @@ It also unlocks two comparisons against ESPN's own projections:
   absolute error, RMSE, correlation and head-to-head win rate. It refuses to
   declare a winner on a small sample.
 
+The **Draft Room** also has *Import ESPN draft*, which replays a completed ESPN
+draft onto the board rather than making you re-enter it pick by pick. And
+*My roster vs ESPN* shows where ESPN under- and over-rates the players you
+already own, which is what decides whether to buy or sell them.
+
 Cookies live in `data/user/espn_credentials.json` with owner-only permissions
 and are sent nowhere but ESPN. They expire every few months; re-copy them if a
 working connection starts failing.

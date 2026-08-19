@@ -38,10 +38,30 @@ export function toast(msg, isError = false) {
 }
 
 // ---------------------------------------------------------------- API client
+/**
+ * Surface the server's own message rather than the JSON envelope around it.
+ * FastAPI puts the human-readable reason in `detail`, and those messages are
+ * written to be actionable ("this league is private, add your cookies") — so
+ * showing `{"detail":"..."}` throws away the part that helps.
+ */
+async function failure(r) {
+  const text = await r.text();
+  try {
+    const body = JSON.parse(text);
+    const detail = body.detail ?? body.reason ?? body.message;
+    if (typeof detail === 'string' && detail) return new Error(detail);
+    if (Array.isArray(detail) && detail.length) {
+      // Pydantic validation errors arrive as a list of field problems.
+      return new Error(detail.map((d) => d.msg || JSON.stringify(d)).join('; '));
+    }
+  } catch { /* not JSON — fall through to the raw text */ }
+  return new Error(`${r.status} ${text.slice(0, 200)}` || `HTTP ${r.status}`);
+}
+
 export const api = {
   async get(path) {
     const r = await fetch(path);
-    if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+    if (!r.ok) throw await failure(r);
     return r.json();
   },
   async post(path, body) {
@@ -50,7 +70,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
     });
-    if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+    if (!r.ok) throw await failure(r);
     return r.json();
   },
 };

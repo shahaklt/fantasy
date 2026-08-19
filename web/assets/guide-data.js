@@ -70,6 +70,10 @@ export const SEASON_PLAYBOOK = [
     p: 'Open the matchup on the Games page. Team total drives everything — the fastest way to find a start is to find the game the model likes more than the market does.' },
   { h: 'Check playoff odds before you trade',
     p: 'Enter both rosters in My League and re-run. A trade that adds points but wrecks a starting slot often lowers title odds.' },
+  { h: 'Mine the gap against ESPN',
+    p: 'ESPN League → Compare projections. Where this model is higher than ESPN, the player is cheap in a room reading ESPN’s numbers; where ESPN is higher, he is expensive. That edge holds whether or not our number turns out to be the better forecast.' },
+  { h: 'Keep yourself honest',
+    p: 'ESPN League → Score vs actuals once a few weeks are done. If ESPN is beating this model on your league’s players, believe the scoreboard and lean on the market blend rather than the bottom-up projection.' },
 ];
 
 /** where: which screen shows it. read: how to act on it. eg: worked example. */
@@ -240,6 +244,43 @@ export const STATS = [
     read: 'Well above the 12.7 baseline means the market is pricing unusual uncertainty: a backup quarterback, bad weather, or a team with nothing to play for.',
     eg: null },
 
+
+  // ------------------------------------------------------------------ espn
+  { key: 'espn_proj_avg', name: 'ESPN projection', group: 'ESPN', where: 'ESPN League · Compare',
+    body: 'ESPN’s own projection for the same player, per game. Their season total is also shown, but the per-game number is the fair comparison — ESPN’s total assumes a full seventeen games while this model prices in expected missed time, so comparing totals scores the injury model rather than the projection.',
+    read: 'Treat it as what the rest of your league believes, because it is literally the number on their screen.',
+    eg: null },
+
+  { key: 'delta_ppg', name: 'Disagreement', group: 'ESPN', where: 'ESPN League · Compare',
+    body: 'This model’s points per game minus ESPN’s, signed from our point of view. Positive means we are higher.',
+    read: 'This is the edge over your league-mates, and it does not depend on who is right. If we are higher on a player, he is cheaper to acquire than he should be in a room reading ESPN. If ESPN is higher, he is expensive.',
+    eg: 'We say 14.8 ppg, ESPN says 11.2. That +3.6 means the waiver claim or trade costs you less than the player is worth — regardless of whether our number or theirs is closer at season’s end.' },
+
+  { key: 'correlation', name: 'Board agreement', group: 'ESPN', where: 'ESPN League · Compare',
+    body: 'How closely the two boards track each other overall: correlation on the values, rank correlation on the ordering, plus the typical and largest gaps.',
+    read: 'High correlation with a few large gaps is the useful shape — it means the boards broadly agree, so the handful of disagreements are worth investigating rather than being noise.',
+    eg: null },
+
+  { key: 'mean_bias_ppg', name: 'Systematic lean', group: 'ESPN', where: 'ESPN League · Compare',
+    body: 'Average signed difference across every compared player, plus the share of players on which we are higher.',
+    read: 'A large lean in either direction is a warning about your setup, not a discovery. If we are higher on nearly everyone, the scoring settings probably do not match your league — sync them from ESPN and rebuild.',
+    eg: null },
+
+  { key: 'gridiron_win_rate', name: 'Head-to-head win rate', group: 'ESPN', where: 'ESPN League · Scorecard',
+    body: 'Share of completed player-weeks where this model’s weekly projection landed closer to the real result than ESPN’s did. Ties are reported separately rather than being split.',
+    read: 'The only comparison that settles anything. Below about 60 player-weeks the app refuses to name a winner, because at that sample the result is mostly luck.',
+    eg: null },
+
+  { key: 'mae', name: 'Mean absolute error', group: 'ESPN', where: 'ESPN League · Scorecard',
+    body: 'Average distance between a projection and what actually happened, in fantasy points, for both models on the same players and weeks. RMSE is shown alongside it and punishes the big misses harder.',
+    read: 'MAE tells you the typical miss; RMSE tells you whether a model occasionally blows a week apart. A model can win on MAE and lose on RMSE, and for weekly head-to-head fantasy the RMSE loser is often the worse choice.',
+    eg: 'MAE 4.10 versus 4.35 is a real but modest edge — about a quarter of a point per player-week, which compounds across a full lineup.' },
+
+  { key: 'closer', name: 'Who was closer', group: 'ESPN', where: 'ESPN League · Scorecard',
+    body: 'Per player-week, which of the two projections was nearer the actual score.',
+    read: 'Sort by our error to find the biggest misses. Those are worth reading individually — a cluster of them on one team usually means a usage assumption is stale.',
+    eg: null },
+
   // --------------------------------------------------------------- markets
   { key: 'model_prob', name: 'Model, market and blended probability', group: 'Markets', where: 'Markets',
     body: 'What the simulation thinks, what the contract costs, and the two combined in log-odds space with a capped shift.',
@@ -272,4 +313,4 @@ export const STATS = [
     eg: null },
 ];
 
-export const GROUPS = ['Value', 'Draft', 'Usage', 'Weekly', 'League', 'Games', 'Markets', 'Live tape'];
+export const GROUPS = ['Value', 'Draft', 'Usage', 'Weekly', 'League', 'Games', 'ESPN', 'Markets', 'Live tape'];
