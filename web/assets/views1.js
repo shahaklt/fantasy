@@ -226,9 +226,72 @@ export async function settings(root) {
     ['snake', 'linear', 'auction'].map((p) =>
       el('option', { value: p, selected: p === league.draft_type ? 'selected' : null }, p)));
 
+  const dataPanel = panel('Data',
+    el('div', {},
+      el('div', { class: 'note', style: 'margin-bottom:12px' },
+        'Source data refreshes on its own at 00:00 and 12:00. Fetch it by hand after '
+        + 'an injury or a depth-chart change, then rebuild so the simulations use it.'),
+      metric('last built', s.meta?.built_at || 'never'),
+      metric('simulations', fmt.i(s.meta?.n_sims || 0)),
+      metric('players', fmt.i(s.meta?.players || 0)),
+      metric('sources', (s.meta?.market_sources || []).join(', ') || '—'),
+      el('div', { style: 'display:flex;gap:6px;margin-top:12px;flex-wrap:wrap' },
+        el('button', {
+          class: 'btn primary',
+          onclick: async (e) => {
+            e.target.disabled = true; e.target.textContent = 'fetching';
+            try {
+              const r = await api.post('/api/refresh');
+              const failed = Object.entries(r.steps).filter(([, v]) => v.startsWith('failed'));
+              const box = $('#fetch-result');
+              box.replaceChildren(...Object.entries(r.steps).map(([k, v]) =>
+                el('div', { class: 'metric' },
+                  el('span', { class: 'k' }, k.replace(/_/g, ' ')),
+                  el('span', { class: `v ${v.startsWith('ok') ? '' : 'bad'}` }, v))));
+              toast(failed.length
+                ? `fetched with ${failed.length} source(s) unavailable`
+                : `all sources fetched in ${r.seconds}s`, failed.length > 0);
+            } catch (err) {
+              toast(String(err), true);
+              $('#fetch-result').replaceChildren(
+                el('div', { class: 'note bad' }, String(err)));
+            }
+            // Deliberately not re-rendering: the per-source result is the
+            // point of pressing the button, and a re-render would wipe it.
+            e.target.disabled = false; e.target.textContent = 'Fetch new data';
+          },
+        }, 'Fetch new data'),
+        el('button', {
+          class: 'btn',
+          onclick: async (e) => {
+            e.target.disabled = true; e.target.textContent = 'queued';
+            try {
+              const r = await api.post('/api/rebuild', { n_sims: 5000 });
+              toast(r.started ? 'rebuilding in the background' : r.detail);
+            } catch (err) { toast(String(err), true); }
+            e.target.disabled = false; e.target.textContent = 'Rebuild simulations';
+          },
+        }, 'Rebuild simulations'),
+        el('button', {
+          class: 'btn ghost',
+          onclick: async (e) => {
+            e.target.disabled = true; e.target.textContent = 'running';
+            try {
+              const r = await api.post('/api/rebuild', { n_sims: 5000, refresh_data: true });
+              toast(r.started ? 'fetching then rebuilding' : r.detail);
+            } catch (err) { toast(String(err), true); }
+            e.target.disabled = false; e.target.textContent = 'Fetch + rebuild';
+          },
+        }, 'Fetch + rebuild')),
+      el('div', { id: 'fetch-result', style: 'margin-top:12px' })),
+    { meta: s.build?.building ? 'building' : 'idle',
+      actions: [led(s.build?.building ? 'busy' : 'on')] });
+
+  form.append(dataPanel);
+
   form.append(
-    el('div', { class: 'card' },
-      el('h3', {}, 'League'),
+    panel('League',
+      el('div', {},
       field('Name', el('input', { value: league.name, id: 'f-name' })),
       field('Teams', num('teams', league.teams, 2, 32)),
       field('Scoring preset', scoringSel),
@@ -265,18 +328,25 @@ export async function settings(root) {
           e.target.disabled = false;
           settings(root);
         },
-      }, 'Save & rebuild')),
+      }, 'Save & rebuild'),
+      el('div', { class: 'note', style: 'margin-top:12px;padding-top:12px;border-top:1px solid var(--line)' },
+        'Playing on ESPN? Connect your league instead of filling this in — it imports '
+        + 'teams, scoring, roster slots, your players, your draft and your schedule.'),
+      el('button', {
+        class: 'btn ghost sm', style: 'margin-top:8px',
+        onclick: () => { location.hash = 'espn'; },
+      }, 'Connect ESPN league →'))),
     el('div', { class: 'grid', style: 'gap:14px;align-content:start' },
-      el('div', { class: 'card' }, el('h3', {}, 'Roster slots'), rosterInputs),
-      el('div', { class: 'card' },
-        el('h3', {}, 'Risk limits'),
+      panel('Roster slots', rosterInputs),
+      panel('Risk limits',
+        el('div', {},
         ...Object.entries(s.risk?.limits || {}).map(([k, v]) => kv(k.replace(/_/g, ' '), String(v))),
         el('div', { class: 'note', style: 'margin-top:10px' },
           `Trading mode is ${s.trading_mode}. To place real orders, start the server with `
           + 'GRIDIRON_TRADING_MODE=live; every order still needs an explicit confirmation. '
-          + `Create the file ${s.risk?.kill_switch_path} to halt all trading immediately.`)),
-      el('div', { class: 'card' },
-        el('h3', {}, 'Kalshi credentials'),
+          + `Create the file ${s.risk?.kill_switch_path} to halt all trading immediately.`))),
+      panel('Kalshi credentials',
+        el('div', {},
         field('Key ID', el('input', { id: 'k-key', placeholder: 'xxxxxxxx-xxxx-…' })),
         field('Private key path', el('input', { id: 'k-path', placeholder: '/home/you/.kalshi/key.pem' })),
         el('button', {
@@ -290,7 +360,7 @@ export async function settings(root) {
         }, 'Save reference'),
         el('div', { class: 'note', style: 'margin-top:8px' },
           'Only the path is stored locally — the key never leaves your machine and is never sent anywhere but Kalshi. '
-          + 'For Polymarket, export POLYMARKET_PRIVATE_KEY before starting the server.'))));
+          + 'For Polymarket, export POLYMARKET_PRIVATE_KEY before starting the server.')))));
 
   root.replaceChildren(form);
 }
@@ -302,8 +372,18 @@ export async function myLeague(root) {
   const board = store.board.length ? store.board : (await api.get('/api/players?limit=600')).players;
   store.board = board;
 
-  const rosterIds = JSON.parse(localStorage.getItem('gridiron.myroster') || '[]');
-  const save = () => localStorage.setItem('gridiron.myroster', JSON.stringify(rosterIds));
+  // An ESPN-imported roster is authoritative; the manual list is the fallback
+  // for people not on ESPN, so nobody has to enter their team twice.
+  let imported = { source: 'manual', player_ids: [], team: null };
+  try { imported = await api.get('/api/myroster'); } catch { /* optional */ }
+
+  const rosterIds = imported.player_ids?.length
+    ? [...imported.player_ids]
+    : JSON.parse(localStorage.getItem('gridiron.myroster') || '[]');
+  const fromEspn = imported.source === 'espn' && imported.player_ids?.length > 0;
+  const save = () => {
+    if (!fromEspn) localStorage.setItem('gridiron.myroster', JSON.stringify(rosterIds));
+  };
 
   const render = async () => {
     const mine = rosterIds.map((id) => board.find((b) => b.player_id === id)).filter(Boolean);
@@ -313,7 +393,7 @@ export async function myLeague(root) {
         `${p.player_name} (${p.position} ${p.team})`)));
 
     const left = panel('My roster', el('div', {},
-      el('div', { style: 'display:flex;gap:8px;margin-bottom:10px' }, picker,
+      fromEspn ? null : el('div', { style: 'display:flex;gap:8px;margin-bottom:10px' }, picker,
         el('button', {
           class: 'btn sm', onclick: () => {
             const v = $('#add-player').value;
@@ -326,10 +406,17 @@ export async function myLeague(root) {
           el('button', { class: 'btn sm ghost', onclick: () => {
             rosterIds.splice(rosterIds.indexOf(p.player_id), 1); save(); render();
           } }, '✕'))))
-        : el('div', { class: 'note' }, 'Add players to see start/sit and playoff odds.')),
-      { meta: `${mine.length} players`,
-        actions: [el('button', { class: 'btn sm ghost',
-          onclick: () => { rosterIds.length = 0; save(); render(); } }, 'Clear')] });
+        : el('div', { class: 'note' },
+            'Add players to see start/sit and playoff odds — or connect your ESPN league '
+            + 'and it fills in automatically.')),
+      { meta: fromEspn
+          ? `${mine.length} from ESPN${imported.team ? ` · ${imported.team.team_name}` : ''}`
+          : `${mine.length} players`,
+        actions: fromEspn
+          ? [led('on'), el('button', { class: 'btn sm ghost',
+              onclick: () => { location.hash = 'espn'; } }, 'Re-sync')]
+          : [el('button', { class: 'btn sm ghost',
+              onclick: () => { rosterIds.length = 0; save(); render(); } }, 'Clear')] });
 
     const right = el('div', { class: 'grid', style: 'gap:14px;align-content:start' });
     if (mine.length >= 1) {

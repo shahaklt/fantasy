@@ -81,6 +81,36 @@ class CredentialsRequest(BaseModel):
     private_key_path: str | None = None
 
 
+class EspnCredentialsRequest(BaseModel):
+    league_id: int = Field(ge=1)
+    espn_s2: str = ""
+    swid: str = ""
+    year: int | None = None
+    team_id: int | None = None
+
+
+class EspnSyncRequest(BaseModel):
+    """What to pull across from ESPN. All on by default -- connect once, done."""
+
+    settings: bool = True        # teams, scoring, roster slots
+    roster: bool = True          # your team's players
+    draft: bool = True           # completed draft picks into the draft board
+    schedule: bool = True        # your weekly matchups
+    team_id: int | None = None
+    rebuild: bool = False        # re-simulate after importing settings
+
+
+class EspnCompareRequest(BaseModel):
+    week: int | None = None
+    min_points: float = 20.0
+    top_n: int = Field(default=15, ge=1, le=60)
+
+
+class EspnScoreRequest(BaseModel):
+    weeks: list[int] | None = None
+    n_sims: int = Field(default=4000, ge=500, le=50_000)
+
+
 class ApiResponse(BaseModel):
     ok: bool = True
     detail: str = ""

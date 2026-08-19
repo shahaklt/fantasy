@@ -21,6 +21,9 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import pipeline
 from ..analysis import GameAnalyst
+from ..analysis.compare import (accuracy_scorecard, agreement_stats, disagreements,
+                                roster_report, season_comparison, weekly_comparison)
+from ..data.espn import EspnCredentials, EspnLeague, espn_available
 from ..config import REPO_ROOT, current_season, detect_backend
 from ..draft import DraftSimulator, DraftState, positional_scarcity
 from ..exchange.base import Action, OrderType, PaperBroker, Side, TradingMode
@@ -35,7 +38,9 @@ from ..quant.microstructure import price_momentum, realised_volatility
 from ..scheduler import build_default_scheduler
 from ..scoring import LeagueSettings
 from ..sim.league import FantasyTeam, LeagueSimulator, start_sit
-from .schemas import (CredentialsRequest, DraftPick, DraftReset, LeagueSimRequest,
+from .schemas import (CredentialsRequest, DraftPick, DraftReset, EspnCompareRequest,
+                      EspnCredentialsRequest, EspnScoreRequest, EspnSyncRequest,
+                      LeagueSimRequest,
                       LeagueUpdate, LineupRequest, PollRequest, RebuildRequest,
                       RecommendRequest, SignalRequest, TradeRequest)
 
@@ -67,6 +72,14 @@ class AppState:
         self.game_cache: dict[int, tuple] = {}
         self.model_probs: dict[str, float] = {}
         self.watchlist: list = []
+        self._espn: EspnLeague | None = None
+        self.espn_roster: list[str] = []      # player_ids, imported from ESPN
+        self.espn_sync: dict = {}
+
+    def espn(self, refresh: bool = False) -> EspnLeague:
+        if self._espn is None or refresh:
+            self._espn = EspnLeague()
+        return self._espn
 
     def broker_for(self, venue: str, live: bool):
         if not live or self.risk.mode != TradingMode.LIVE:
@@ -398,9 +411,29 @@ def weekly_projections(week: int = 1, position: str | None = None,
 # --------------------------------------------------------------------------------------
 # Fantasy league
 # --------------------------------------------------------------------------------------
+@app.get("/api/myroster")
+def my_roster():
+    """Your roster, from ESPN when connected.
+
+    Having imported it once, the app should not also ask you to type it in.
+    """
+    a = pipeline.get_artifacts(build_if_missing=False)
+    ids = state.espn_roster
+    rows = []
+    if ids and a.ready:
+        rows = _df(a.board.filter(pl.col("player_id").is_in(ids)))
+    return _clean({"source": "espn" if ids else "manual",
+                   "player_ids": ids, "players": rows,
+                   "team": (state.espn_sync.get("imported", {})
+                            .get("roster", {}) or {}).get("team")})
+
+
 @app.post("/api/lineup")
 def lineup(req: LineupRequest):
     a = arts(need_sims=True)
+    # An imported roster is the default subject when none is supplied.
+    if not req.player_ids and state.espn_roster:
+        req.player_ids = state.espn_roster
     if a.season_result is None or a.season_result.weekly is None:
         raise HTTPException(400, "weekly simulations are not loaded; rebuild first")
     return _clean(_df(start_sit(a.season_result, a.league, req.player_ids, req.week)))
@@ -558,6 +591,318 @@ def save_credentials(req: CredentialsRequest):
         return {"ok": True, "detail": f"saved to {path}",
                 "authenticated": state.venues["kalshi"].authenticated}
     raise HTTPException(400, "set POLYMARKET_PRIVATE_KEY in the environment for Polymarket")
+
+
+# --------------------------------------------------------------------------------------
+# ESPN league
+# --------------------------------------------------------------------------------------
+@app.get("/api/espn/status")
+def espn_status():
+    """Whether an ESPN league is configured, and whether it actually connects."""
+    creds = EspnCredentials.load()
+    body = {
+        "library_installed": espn_available(),
+        "configured": creds is not None,
+        "league_id": creds.league_id if creds else None,
+        "private": creds.is_private if creds else False,
+        "connected": False,
+        "detail": "",
+    }
+    if not creds:
+        body["detail"] = ("No league configured. Add your league id in Settings — "
+                          "and your espn_s2 / SWID cookies if the league is private.")
+        return _clean(body)
+    try:
+        body.update(state.espn().connect())
+    except Exception as exc:  # noqa: BLE001
+        body["detail"] = str(exc)
+    return _clean(body)
+
+
+@app.post("/api/espn/credentials")
+def espn_credentials(req: EspnCredentialsRequest):
+    """Save league id and cookies locally (file mode 0600), then verify."""
+    creds = EspnCredentials(league_id=req.league_id, espn_s2=req.espn_s2.strip(),
+                            swid=req.swid.strip(), year=req.year)
+    path = creds.save()
+    state._espn = None
+    try:
+        info = state.espn(refresh=True).connect()
+        return _clean({"ok": True, "saved_to": str(path), **info})
+    except Exception as exc:  # noqa: BLE001
+        return _clean({"ok": False, "saved_to": str(path), "detail": str(exc)})
+
+
+@app.get("/api/espn/league")
+def espn_league():
+    """Teams, standings and every rostered player in your league."""
+    try:
+        lg = state.espn()
+        return _clean({
+            "info": lg.connect(),
+            "teams": _df(lg.teams()),
+            "rosters": _df(lg.rosters()),
+        })
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc))
+
+
+@app.post("/api/espn/compare")
+def espn_compare(req: EspnCompareRequest):
+    """Season-long: this model's projections against ESPN's, player by player."""
+    a = arts()
+    try:
+        lg = state.espn()
+        espn_players = lg.rosters()
+        free = lg.free_agents(size=150)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc))
+
+    if not free.is_empty():
+        espn_players = pl.concat([espn_players, free], how="diagonal_relaxed")
+    comparison = season_comparison(a.board, espn_players, min_points=req.min_points)
+    if comparison.is_empty():
+        raise HTTPException(422, "No players matched between the two boards. "
+                                 "Check the league year matches the projection season.")
+    return _clean({
+        "n_compared": comparison.height,
+        "agreement": agreement_stats(comparison),
+        **disagreements(comparison, n=req.top_n),
+        "all": _df(comparison, 400),
+    })
+
+
+@app.post("/api/espn/roster")
+def espn_roster(team_id: int | None = None, team_name: str | None = None):
+    """How the two boards value the players you actually own."""
+    a = arts()
+    try:
+        lg = state.espn()
+        mine = lg.my_roster(team_name=team_name, team_id=team_id)
+        comparison = season_comparison(a.board, lg.rosters(), min_points=0.0)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc))
+    return _clean(roster_report(mine, comparison))
+
+
+@app.post("/api/espn/scorecard")
+def espn_scorecard(req: EspnScoreRequest):
+    """Score both projections against what actually happened, week by week.
+
+    This is the only comparison that settles anything: ESPN's weekly projection
+    and ours are both measured against the real result on the same players.
+    """
+    a = arts(need_sims=True)
+    try:
+        lg = state.espn()
+        info = lg.connect()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc))
+
+    current = int(info.get("current_week") or 1)
+    weeks = req.weeks or list(range(1, max(current, 1)))
+    weeks = [w for w in weeks if 1 <= w <= 18]
+    if not weeks:
+        return _clean({"scored": 0, "note": "no completed weeks yet this season",
+                       "weeks_requested": []})
+
+    frames = []
+    for w in weeks:
+        espn_week = lg.week_projections(w)
+        if espn_week.is_empty():
+            continue
+        _, _, players = _games(w, req.n_sims)
+        merged = weekly_comparison(players, espn_week, w)
+        if not merged.is_empty():
+            frames.append(merged)
+
+    if not frames:
+        return _clean({"scored": 0, "note": "no overlapping player-weeks found",
+                       "weeks_requested": weeks})
+
+    combined = pl.concat(frames, how="diagonal_relaxed")
+    card = accuracy_scorecard(combined)
+    worst = combined.filter(pl.col("espn_week_actual") > 0) if "espn_week_actual" in combined.columns else combined
+    return _clean({
+        **card,
+        "weeks_requested": weeks,
+        "biggest_misses": _df(worst.sort("gridiron_err", descending=True), 20)
+                          if "gridiron_err" in worst.columns else [],
+        "best_calls": _df(worst.filter(pl.col("closer") == "gridiron")
+                          .sort("espn_err", descending=True), 20)
+                      if "closer" in worst.columns else [],
+    })
+
+
+@app.get("/api/espn/week/{week}")
+def espn_week(week: int, n_sims: int = Query(4000, ge=500, le=50_000)):
+    """One week, both projections side by side (plus actuals once played)."""
+    a = arts(need_sims=True)
+    try:
+        espn_week_df = state.espn().week_projections(week)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc))
+    if espn_week_df.is_empty():
+        raise HTTPException(404, f"ESPN returned no box scores for week {week}")
+    _, _, players = _games(week, n_sims)
+    merged = weekly_comparison(players, espn_week_df, week)
+    return _clean({"week": week, "n": merged.height,
+                   "scorecard": accuracy_scorecard(merged),
+                   "players": _df(merged, 400)})
+
+
+@app.post("/api/espn/sync")
+def espn_sync(req: EspnSyncRequest):
+    """Import everything from your ESPN league in one call.
+
+    Connecting once should be enough: this pulls the league's real settings,
+    your roster, the completed draft and your weekly schedule, so nothing has
+    to be entered a second time by hand.
+    """
+    try:
+        lg = state.espn()
+        info = lg.connect()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc))
+
+    if req.team_id is not None:
+        lg.credentials.team_id = int(req.team_id)
+        lg.credentials.save()
+
+    result: dict = {"league": info, "imported": {}, "warnings": []}
+
+    # ---- league settings -------------------------------------------------
+    if req.settings:
+        try:
+            imported = lg.import_settings()
+            if imported:
+                current = pipeline.load_league().to_config()
+                current["name"] = imported.get("name") or current.get("name")
+                current["teams"] = imported.get("teams") or current["teams"]
+                current["scoring_preset"] = imported.get("scoring_preset",
+                                                         current["scoring_preset"])
+                if imported.get("roster"):
+                    current["roster"] = imported["roster"]
+                if imported.get("scoring_overrides"):
+                    current.setdefault("scoring", {}).update(imported["scoring_overrides"])
+                league = LeagueSettings.from_dict(current)
+                pipeline.save_league(league)
+                pipeline.invalidate()
+                state.draft = DraftState(league=league, my_slot=league.draft_slot)
+                result["imported"]["settings"] = {
+                    "teams": league.teams, "scoring_preset": league.scoring_preset,
+                    "roster": league.roster,
+                    "note": "rebuild simulations to apply these",
+                }
+        except Exception as exc:  # noqa: BLE001
+            result["warnings"].append(f"settings: {exc}")
+
+    # ---- your roster -----------------------------------------------------
+    if req.roster:
+        try:
+            mine = lg.my_roster(team_id=req.team_id)
+            matched, unmatched = _match_to_board(mine)
+            state.espn_roster = matched
+            result["imported"]["roster"] = {
+                "espn_players": mine.height, "matched": len(matched),
+                "unmatched": unmatched,
+                "team": lg.my_team() or None,
+            }
+            if unmatched:
+                result["warnings"].append(
+                    f"{len(unmatched)} ESPN players had no match on the projection board")
+        except Exception as exc:  # noqa: BLE001
+            result["warnings"].append(f"roster: {exc}")
+
+    # ---- draft picks -----------------------------------------------------
+    if req.draft:
+        try:
+            picks = lg.draft()
+            if picks.is_empty():
+                result["imported"]["draft"] = {"picks": 0, "note": "league has not drafted yet"}
+            else:
+                recorded = _apply_draft(picks)
+                result["imported"]["draft"] = recorded
+        except Exception as exc:  # noqa: BLE001
+            result["warnings"].append(f"draft: {exc}")
+
+    # ---- schedule --------------------------------------------------------
+    if req.schedule:
+        try:
+            sched = lg.schedule()
+            result["imported"]["schedule"] = _df(sched)
+        except Exception as exc:  # noqa: BLE001
+            result["warnings"].append(f"schedule: {exc}")
+
+    state.espn_sync = result
+    if req.rebuild:
+        pipeline.start_background_build()
+        result["rebuilding"] = True
+    return _clean(result)
+
+
+def _match_to_board(espn_players: pl.DataFrame) -> tuple[list[str], list[str]]:
+    """Map ESPN players onto our player_ids by normalised name."""
+    a = pipeline.get_artifacts(build_if_missing=False)
+    if not a.ready or espn_players.is_empty():
+        return [], []
+    board = a.board
+    if "merge_name" not in board.columns:
+        from ..data.market import normalize_name
+        board = board.with_columns(
+            pl.col("player_name").map_elements(normalize_name, return_dtype=pl.Utf8)
+            .alias("merge_name"))
+    lookup = dict(zip(board["merge_name"].to_list(), board["player_id"].to_list()))
+    matched, unmatched = [], []
+    for row in espn_players.iter_rows(named=True):
+        pid = lookup.get(row.get("merge_name"))
+        (matched.append(pid) if pid else unmatched.append(row.get("player_name", "?")))
+    return matched, unmatched
+
+
+def _apply_draft(picks: pl.DataFrame) -> dict:
+    """Replay a completed ESPN draft into the draft board."""
+    a = pipeline.get_artifacts(build_if_missing=False)
+    if not a.ready:
+        return {"picks": int(picks.height), "recorded": 0,
+                "note": "projections not built yet, so picks could not be matched"}
+    board = a.board
+    if "merge_name" not in board.columns:
+        from ..data.market import normalize_name
+        board = board.with_columns(
+            pl.col("player_name").map_elements(normalize_name, return_dtype=pl.Utf8)
+            .alias("merge_name"))
+    lookup = dict(zip(board["merge_name"].to_list(), board["player_id"].to_list()))
+
+    league = pipeline.load_league()
+    state.draft = DraftState(league=league, my_slot=state.draft.my_slot)
+    ordered = picks.sort(["round", "pick"])
+    recorded, missing = 0, []
+    for row in ordered.iter_rows(named=True):
+        pid = lookup.get(row.get("merge_name"))
+        if pid and pid not in state.draft.drafted:
+            state.draft.record(pid)
+            recorded += 1
+        elif not pid:
+            missing.append(row.get("player_name", "?"))
+    return {"picks": int(picks.height), "recorded": recorded,
+            "unmatched": missing[:20],
+            "note": "draft board now reflects your real draft"}
+
+
+@app.get("/api/espn/sync")
+def espn_sync_status():
+    """What the last sync imported."""
+    return _clean({"last_sync": state.espn_sync,
+                   "roster_size": len(state.espn_roster)})
+
+
+@app.get("/api/espn/draft")
+def espn_draft():
+    try:
+        return _clean({"picks": _df(state.espn().draft())})
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc))
 
 
 # --------------------------------------------------------------------------------------

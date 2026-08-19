@@ -3,6 +3,7 @@ import { $, $$, api, el, fmt, led, toast } from './ui.js';
 import { dashboard, myLeague, projections, settings, store } from './views1.js';
 import { draft, games, live, markets } from './views2.js';
 import { guide } from './guide.js';
+import { espn } from './espn.js';
 
 const VIEWS = {
   dashboard:   { title: 'Dashboard',   render: dashboard,   key: '1' },
@@ -10,6 +11,7 @@ const VIEWS = {
   draft:       { title: 'Draft Room',  render: draft,       key: '3' },
   games:       { title: 'Games',       render: games,       key: '4' },
   league:      { title: 'My League',   render: myLeague,    key: '5' },
+  espn:        { title: 'ESPN League', render: espn,        key: '0' },
   markets:     { title: 'Markets',     render: markets,     key: '6' },
   live:        { title: 'Live Tape',   render: live,        key: '7' },
   guide:       { title: 'Stats Guide', render: guide,       key: '8' },
