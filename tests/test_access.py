@@ -257,3 +257,49 @@ def test_a_startup_lan_bind_reports_itself_as_untoggleable(tmp_path, monkeypatch
         assert body["on_network"] is True and body["can_toggle"] is False
         assert client.post("/api/access/enable").json()["already"] is True
         assert client.post("/api/access/disable").status_code == 400
+
+
+# --------------------------------------------------- choosing the right address
+def test_adapter_hints_name_what_a_phone_cannot_reach():
+    """A VM or Docker address fails exactly like a firewall block, silently."""
+    assert "VirtualBox" in net.adapter_hint("192.168.56.1")
+    assert "Docker" in net.adapter_hint("192.168.65.3")
+    assert "WSL" in net.adapter_hint("172.20.3.4")
+    assert net.adapter_hint("169.254.1.1"), "a self-assigned address has no network at all"
+    # Tailscale does reach a phone, as long as the phone is on the tailnet.
+    assert "tailnet" in net.adapter_hint("100.101.1.2")
+    # An ordinary home subnet gets no hint rather than a guess.
+    assert net.adapter_hint("192.168.1.20") == ""
+    assert net.adapter_hint("192.168.231.138") == ""
+
+
+def test_the_routed_address_is_marked_and_comes_first(monkeypatch):
+    monkeypatch.setattr(net, "_route_probe", lambda: "192.168.1.20")
+    monkeypatch.setattr(net, "lan_addresses",
+                        lambda: ["192.168.1.20", "192.168.56.1", "172.20.3.4"])
+    found = net.address_candidates()
+    assert [c.address for c in found][0] == "192.168.1.20"
+    assert found[0].routed and found[0].likely
+    assert not found[1].routed
+    assert found[1].hint and found[2].hint, "the virtual ones should be called out"
+
+
+def test_every_address_gets_its_own_link_and_code(guarded, monkeypatch):
+    """One QR for the routed address is useless when the routed address is wrong."""
+    monkeypatch.setattr(net, "_route_probe", lambda: "192.168.1.20")
+    monkeypatch.setattr(net, "lan_addresses", lambda: ["192.168.1.20", "192.168.56.1"])
+    with local_client() as client:
+        candidates = client.get("/api/access").json()["candidates"]
+    assert [c["address"] for c in candidates] == ["192.168.1.20", "192.168.56.1"]
+    for candidate in candidates:
+        assert candidate["url"].startswith(f"http://{candidate['address']}:")
+        assert candidate["url"].endswith(guarded)
+        assert candidate["qr"].startswith("<svg")
+
+
+def test_candidates_are_never_served_to_a_paired_phone(guarded, monkeypatch):
+    """They carry the token in every URL, so they are as sensitive as the token."""
+    monkeypatch.setattr(net, "lan_addresses", lambda: ["192.168.1.20"])
+    with phone_client() as client:
+        body = client.get("/api/access", headers={access.HEADER: guarded}).json()
+    assert body["candidates"] == []

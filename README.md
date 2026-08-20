@@ -90,6 +90,26 @@ The link carries an access token, and the browser keeps it, so you scan once
 per device. The same QR code is on the Settings screen under **Phone access**,
 along with a rotate button that unpairs every device at once.
 
+### If the phone shows nothing at all
+
+A page that never loads is a network problem, not an authentication one — a
+wrong token returns the dark **"Gridiron — locked"** page instead. Three causes,
+in the order they actually happen:
+
+1. **The firewall.** The first time Python listens on the network, Windows asks
+   whether to allow it; a dismissed prompt blocks every phone silently. Allow
+   Python on *Private* networks in Windows Defender Firewall. On Linux,
+   `sudo ufw allow 8000/tcp`.
+2. **The wrong address.** A machine with a VM, Docker or a VPN has several
+   addresses and only one of them reaches your phone. Settings → Phone access
+   shows a tab per address with its own QR code, and marks the one your machine
+   routes through; `gridiron pair --all` prints the same thing in the terminal.
+   Addresses belonging to VirtualBox, Docker, WSL or Hyper-V are labelled as
+   such.
+3. **A different network.** Phones drift onto guest wifi or cellular. Check the
+   SSID matches, and that the router does not have client or AP isolation on —
+   guest networks usually do, and it blocks device-to-device traffic by design.
+
 ### Why there is a token at all
 
 On loopback the only client is you, so `./run.sh` asks for nothing. `--lan`

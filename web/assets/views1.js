@@ -206,6 +206,36 @@ export async function playerDrawer(playerId) {
 }
 
 // ------------------------------------------------------------------ SETTINGS
+/** What to check when the phone shows nothing at all.
+ *
+ * Worth spelling out because the three causes are indistinguishable from the
+ * phone: in every one of them the page simply never arrives. A wrong token
+ * looks different — it returns the "locked" page — so if you are reading a
+ * spinner, it is one of these.
+ */
+function troubleshooting(acc) {
+  const windows = (acc.platform || '').startsWith('win');
+  const steps = [
+    windows
+      ? ['Windows Firewall', 'The first time Python listens on the network Windows asks '
+        + 'whether to allow it, and a dismissed prompt blocks every phone silently. Allow '
+        + 'Python on Private networks in Windows Defender Firewall.']
+      : ['Firewall', 'Allow inbound connections to this port. On Linux: '
+        + 'sudo ufw allow ' + (acc.listener_port || acc.port) + '/tcp'],
+    ['Wrong address', 'A machine with a VM, Docker or a VPN has several addresses and only '
+      + 'one reaches your phone. Try each tab above — that is what they are for.'],
+    ['Different network', 'Phones drift onto guest wifi or cellular. Check the phone is on '
+      + 'the same SSID, and that the router does not have client or AP isolation switched on.'],
+  ];
+  return el('details', { style: 'margin-top:12px' },
+    el('summary', { style: 'cursor:pointer;font:11px/1.6 var(--mono);color:var(--ink-3)' },
+      'Nothing loading on the phone?'),
+    el('div', { style: 'margin-top:8px' },
+      steps.map(([title, text]) => el('div', { class: 'note', style: 'margin-bottom:8px' },
+        el('b', { style: 'color:var(--ink-2)' }, title + ' — '), text))));
+}
+
+
 /** Everything needed to open this panel on a phone, without typing a token.
  *
  * The panel re-renders itself in place rather than re-rendering the settings
@@ -286,17 +316,55 @@ async function phoneAccessPanel() {
   }
 
   function onView(acc) {
-    const link = el('input', { value: acc.url, readonly: 'readonly',
+    // A machine with a VM, Docker or a VPN has several addresses and only one
+    // of them reaches the sofa. Guessing wrong looks exactly like a firewall
+    // block, so every candidate gets its own tab, link and code.
+    const candidates = (acc.candidates || []).length
+      ? acc.candidates
+      : [{ address: null, url: acc.url, qr: acc.qr, routed: true, hint: '' }];
+    let chosen = candidates.find((c) => c.routed) || candidates[0];
+
+    const link = el('input', { value: chosen.url, readonly: 'readonly',
       onclick: (e) => e.target.select(), style: 'width:100%' });
+    const qrBox = el('div', {});
+    const hintLine = el('div', { class: 'note' });
+
+    function showChosen() {
+      qrBox.replaceChildren(chosen.qr
+        ? el('div', { class: 'qr', html: chosen.qr })
+        : el('div', { class: 'note bad' },
+            'No QR code — install segno (pip install segno) and restart to get one.'));
+      link.value = chosen.url;
+      hintLine.className = chosen.hint ? 'note warn' : 'note';
+      hintLine.textContent = chosen.hint
+        || (candidates.length > 1
+          ? 'If this one does not load, try the other addresses above.'
+          : '');
+    }
+
+    showChosen();      // the box starts empty otherwise
+
+    const chooser = candidates.length > 1
+      ? el('div', { class: 'seg', style: 'margin-bottom:10px;flex-wrap:wrap' },
+          candidates.map((c) => el('button', {
+            class: c === chosen ? 'active' : '',
+            title: c.hint || (c.routed ? 'the address your machine routes through' : ''),
+            onclick: (e) => {
+              chosen = c;
+              [...e.target.parentElement.children].forEach((b) =>
+                b.classList.toggle('active', b === e.target));
+              showChosen();
+            },
+          }, c.address + (c.routed ? ' \u2713' : ''))))
+      : null;
 
     const body = el('div', {},
       el('div', { class: 'note', style: 'margin-bottom:10px' },
         'Scan this with your phone camera while it is on the same wifi. The link carries '
         + 'the token, so the device is remembered after the first load.'),
-      acc.qr
-        ? el('div', { class: 'qr', html: acc.qr })
-        : el('div', { class: 'note bad' },
-            'No QR code — install segno (pip install segno) and restart to get one.'),
+      chooser,
+      qrBox,
+      hintLine,
       el('div', { style: 'margin-top:10px' }, link),
       el('div', { style: 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap' },
         el('button', {
@@ -322,7 +390,7 @@ async function phoneAccessPanel() {
         toggleButton(acc)),
       kv('token', acc.token),
       ...(acc.listener_port ? [kv('listening on', `0.0.0.0:${acc.listener_port}`)] : []),
-      ...(acc.alternates || []).map((u) => kv('also reachable at', u)),
+      troubleshooting(acc),
       el('div', { class: 'note', style: 'margin-top:10px' },
         acc.url.startsWith('https://')
           ? 'That is an HTTPS origin, so the phone can install the panel as a real app '

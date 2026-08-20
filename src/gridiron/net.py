@@ -72,6 +72,59 @@ def lan_addresses() -> list[str]:
     return found
 
 
+# Ranges that belong to something other than your wifi. A desktop with a VM,
+# Docker or a VPN installed reports several addresses, and only one of them is
+# the one a phone on the sofa can route to.
+ADAPTER_HINTS: tuple[tuple[str, str], ...] = (
+    ("192.168.56.0/24", "usually VirtualBox host-only — a phone cannot reach this"),
+    ("192.168.65.0/24", "usually Docker Desktop — a phone cannot reach this"),
+    ("172.16.0.0/12", "often WSL or Hyper-V — a phone usually cannot reach this"),
+    ("198.18.0.0/15", "benchmark range, usually a VPN adapter"),
+    ("100.64.0.0/10", "Tailscale or carrier NAT — works only if the phone is on the same tailnet"),
+    ("169.254.0.0/16", "self-assigned; this adapter has no working network"),
+)
+
+
+def adapter_hint(address: str) -> str:
+    """What an address is probably attached to, when we can tell."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return ""
+    for cidr, hint in ADAPTER_HINTS:
+        if ip in ipaddress.ip_network(cidr):
+            return hint
+    return ""
+
+
+@dataclass
+class Address:
+    """One candidate address, with whatever we can say about it."""
+
+    address: str
+    routed: bool = False       # the one the routing table picks to leave the machine
+    hint: str = ""
+
+    @property
+    def likely(self) -> bool:
+        """Worth trying first."""
+        return self.routed and not self.hint
+
+
+def address_candidates() -> list[Address]:
+    """Every address a phone might reach, best guess first.
+
+    The routed address is usually right, but "usually" is what makes this worth
+    listing: when it is wrong the failure looks exactly like a firewall block,
+    and there is nothing on screen to suggest trying a different one.
+    """
+    routed = _route_probe()
+    out: list[Address] = []
+    for addr in lan_addresses():
+        out.append(Address(address=addr, routed=addr == routed, hint=adapter_hint(addr)))
+    return out
+
+
 def resolve_host(host: str) -> str:
     """The address to advertise for a server bound to `host`."""
     if is_wildcard_host(host):

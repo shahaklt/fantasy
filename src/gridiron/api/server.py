@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -229,6 +230,16 @@ def access_info(request: Request):
         "qr_available": net.qr_svg("probe") is not None,
         "tunnel_available": net.tunnel_command() is not None,
         "pinned_by_env": bool(os.environ.get("GRIDIRON_TOKEN")),
+        # Every address with its own link and code. The routed one is usually
+        # right, and when it is not the failure is indistinguishable from a
+        # firewall block, so the alternatives have to be one tap away.
+        "candidates": [
+            {"address": c.address, "routed": c.routed, "hint": c.hint,
+             "url": net.panel_url(c.address, port, token),
+             "qr": net.qr_svg(net.panel_url(c.address, port, token))}
+            for c in net.address_candidates()
+        ] if local and guarded else [],
+        "platform": sys.platform,
     })
 
 
