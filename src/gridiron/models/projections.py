@@ -152,7 +152,11 @@ def build_player_pool(season: int, lookback: int = 3) -> pl.DataFrame:
         roster = roster.with_columns(_age_years(pl.col("birth_date"), season))
     else:
         roster = roster.with_columns(pl.lit(26.0).alias("age"))
-    roster = roster.unique(subset=["player_id"], keep="first")
+    # Sort before dedup: keep="first" is only meaningful on a defined order, and
+    # without one a player with two roster rows kept an arbitrary one, changing
+    # which players survived between otherwise identical builds.
+    roster = roster.sort(["player_id", "team", "position"]).unique(
+        subset=["player_id"], keep="first", maintain_order=True)
 
     # Depth chart rank within position group.
     dc = nv.latest_depth_chart(season)
@@ -481,7 +485,12 @@ def _market_blend(df: pl.DataFrame) -> pl.DataFrame:
             continue
         idx = np.flatnonzero(sel)
         # Rank within position (1 = best), derived from the overall board.
-        pos_rank = np.argsort(np.argsort(mkt[idx])).astype(float) + 1.0
+        # Stable sorts: every unranked player carries the same sentinel market
+        # rank, so a quicksort permutes that whole tied block differently on
+        # each run. The isotonic fit below is global, so that permutation moved
+        # projections for most of the board between identical builds.
+        pos_rank = np.argsort(np.argsort(mkt[idx], kind="stable"),
+                              kind="stable").astype(float) + 1.0
         market_ppg[idx] = isotonic_decreasing(pos_rank, ppg[idx])
 
     conf = df["role_confidence"].to_numpy()
@@ -571,7 +580,19 @@ def build_projections(season: int | None = None, league: LeagueSettings | None =
         extras.append(extra)
 
     if extras:
+        # Kickers and defences are modelled in special.py, but the roster pool
+        # also contains kickers — concatenating both put 29 players on the board
+        # twice, where they double-counted in every team-level aggregation.
+        # The specialised model is the intended source, so the pool's copies go.
+        specialised = {"K", "DST"}
+        players = players.filter(~pl.col("position").is_in(list(specialised)))
         players = pl.concat([players] + extras, how="diagonal_relaxed")
-    players = players.sort("blended_ppg", descending=True, nulls_last=True)
+        players = players.unique(subset=["player_id"], keep="first", maintain_order=True)
+    # player_id breaks ties so the ordering is total. Without it, players on
+    # equal projected points order arbitrarily, which shuffles their index in
+    # the simulation arrays and therefore which random draws they receive —
+    # enough to move a backtest metric in the third decimal between runs.
+    players = players.sort(["blended_ppg", "player_id"],
+                           descending=[True, False], nulls_last=True)
     return ProjectionSet(players=players, team_weeks=team_week, season=season,
                          league=league, context=ctx, market_sources=sources)

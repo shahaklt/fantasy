@@ -119,6 +119,10 @@ def build_sim_inputs(proj: ProjectionSet, min_ppg: float = 0.15) -> SimInputs:
     p = proj.players
     if "blended_ppg" in p.columns:
         p = p.filter(pl.col("blended_ppg").fill_null(0.0) >= min_ppg)
+    # A total order on the player axis: the simulation indexes RNG draws by row,
+    # so an unstable sort makes an otherwise seeded run irreproducible.
+    if "player_id" in p.columns:
+        p = p.sort("player_id")
     teams = sorted(set(proj.team_weeks["team"].to_list()))
     t_index = {t: i for i, t in enumerate(teams)}
     p = p.filter(pl.col("team").is_in(teams))
