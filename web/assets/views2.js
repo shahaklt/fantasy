@@ -1,6 +1,6 @@
 // Draft Room, Games, Markets and Live Tape views.
-import { $, api, barChart, bounds, distBar, el, fmt, gauge, heatCell, histogram, kv,
-         led, metric, panel, posTag, sparkline, table, toast } from './ui.js';
+import { $, api, barChart, bounds, distBar, DRAFT_SIMS, el, fmt, gauge, heatCell, histogram,
+        kv, led, metric, panel, posTag, SIMS, sparkline, table, toast } from './ui.js';
 import { openDrawer, store } from './views1.js';
 
 // ---------------------------------------------------------------- DRAFT ROOM
@@ -136,7 +136,7 @@ export async function draft(root) {
     const btn = evt.target;
     btn.disabled = true; btn.textContent = 'simulating…';
     try {
-      const r = await api.post('/api/draft/recommend', { n_sims: 200, top_k: 12 });
+      const r = await api.post('/api/draft/recommend', { n_sims: DRAFT_SIMS, top_k: 12 });
       const best = r.recommendations[0];
       const card = el('div', { class: 'card' },
         el('h3', {}, `Best pick at #${r.pick}`),
@@ -175,7 +175,7 @@ export async function games(root) {
 
   async function load() {
     body.replaceChildren(el('div', { class: 'empty' }, el('span', { class: 'loading' }), ' simulating the week'));
-    const data = await api.get(`/api/games?week=${store.week}&n_sims=10000`);
+    const data = await api.get(`/api/games?week=${store.week}&n_sims=${SIMS}`);
     const games = data.games;
     const rows = games.map((g) => {
       const edge = Math.abs(g.spread_edge) > 1.5 || Math.abs(g.total_edge) > 1.5;
@@ -226,7 +226,7 @@ export async function games(root) {
 async function gameDrawer(gameId, week) {
   openDrawer(el('div', { class: 'empty' }, el('span', { class: 'loading' }), ' building breakdown'));
   try {
-    const d = await api.get(`/api/games/${gameId}?week=${week}&n_sims=10000`);
+    const d = await api.get(`/api/games/${gameId}?week=${week}&n_sims=${SIMS}`);
     const s = d.summary;
     const teamCard = (b, label) => panel(`${label} · ${b.team}`, el('div', {},
       kv('Fantasy points', fmt.n(b.totals.fantasy_points, 1)),
@@ -303,7 +303,7 @@ export async function markets(root) {
     const scanBtn = el('button', { class: 'btn primary', onclick: async (e) => {
       e.target.disabled = true; e.target.textContent = 'scanning…';
       try {
-        const r = await api.post('/api/markets/signals', { week: store.week, min_edge: 0.02, n_sims: 10000 });
+        const r = await api.post('/api/markets/signals', { week: store.week, min_edge: 0.02, n_sims: SIMS });
         signalBox.replaceChildren(signalTable(r));
         toast(`${r.signals.length} edges across ${r.markets_scanned} markets`);
       } catch (err) { toast(String(err), true); }

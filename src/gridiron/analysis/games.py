@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import polars as pl
 
+from ..config import DEFAULT_SIMS
 from ..quant.game_model import GameLine, price_game
 from ..sim.engine import MonteCarloEngine, SimInputs
 
@@ -119,7 +120,7 @@ class GameAnalyst:
         weeks = list(self.inp.weeks)
         return weeks.index(week) if week in weeks else 0
 
-    def predict_week(self, week: int, n_sims: int = 20_000,
+    def predict_week(self, week: int, n_sims: int = DEFAULT_SIMS,
                      with_players: bool = True) -> tuple[list[GamePrediction], pl.DataFrame]:
         """Simulate one week and return game predictions plus player detail."""
         wi = self.week_index(week)

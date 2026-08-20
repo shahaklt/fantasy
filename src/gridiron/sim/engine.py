@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import polars as pl
 
-from ..config import REGULAR_SEASON_WEEKS, sim_chunk_size
+from ..config import DEFAULT_SIMS, REGULAR_SEASON_WEEKS, sim_chunk_size
 from ..models.availability import AvailabilityModel, availability_params
 from ..models.projections import ProjectionSet
 from ..scoring import LeagueSettings, Scoring
@@ -589,7 +589,7 @@ class MonteCarloEngine:
                 + tds * s.dst_td + safeties * s.dst_safety + pa_pts)
 
     # ----------------------------------------------------------------- season
-    def simulate_season(self, n_sims: int = 10_000, weeks: list[int] | None = None,
+    def simulate_season(self, n_sims: int = DEFAULT_SIMS, weeks: list[int] | None = None,
                         chunk: int | None = None, keep_weekly: bool = True,
                         progress=None) -> "SeasonResult":
         """Simulate whole seasons with a persistent per-player injury state.

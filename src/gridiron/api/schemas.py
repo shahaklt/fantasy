@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ..config import DEFAULT_SIMS, DRAFT_SIMS
+
 
 class LeagueUpdate(BaseModel):
     name: str | None = None
@@ -20,7 +22,7 @@ class LeagueUpdate(BaseModel):
 
 
 class RebuildRequest(BaseModel):
-    n_sims: int = Field(default=5000, ge=200, le=200_000)
+    n_sims: int = Field(default=DEFAULT_SIMS, ge=200, le=200_000)
     season: int | None = None
     refresh_data: bool = False
 
@@ -36,7 +38,7 @@ class DraftReset(BaseModel):
 
 
 class RecommendRequest(BaseModel):
-    n_sims: int = Field(default=150, ge=20, le=3000)
+    n_sims: int = Field(default=DRAFT_SIMS, ge=20, le=20_000)
     top_k: int = Field(default=12, ge=1, le=40)
     candidates: list[str] | None = None
 
@@ -67,7 +69,7 @@ class TradeRequest(BaseModel):
 class SignalRequest(BaseModel):
     week: int | None = None
     min_edge: float = 0.02
-    n_sims: int = Field(default=8000, ge=500, le=100_000)
+    n_sims: int = Field(default=DEFAULT_SIMS, ge=500, le=100_000)
 
 
 class PollRequest(BaseModel):
@@ -114,7 +116,7 @@ class EspnCompareRequest(BaseModel):
 
 class EspnScoreRequest(BaseModel):
     weeks: list[int] | None = None
-    n_sims: int = Field(default=4000, ge=500, le=50_000)
+    n_sims: int = Field(default=DEFAULT_SIMS, ge=500, le=50_000)
 
 
 class ApiResponse(BaseModel):

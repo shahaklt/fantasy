@@ -15,7 +15,7 @@ from pathlib import Path
 
 import polars as pl
 
-from .config import ARTIFACT_DIR, current_season, detect_backend
+from .config import ARTIFACT_DIR, DEFAULT_SIMS, current_season, detect_backend
 from .data import market as market_data
 from .data import nflverse as nv
 from .draft import add_value_columns, assign_tiers, board_with_availability, snake_picks
@@ -99,7 +99,7 @@ def refresh_data(force: bool = False) -> dict:
 
 
 def build_all(league: LeagueSettings | None = None, season: int | None = None,
-              n_sims: int = 5000, keep_weekly: bool = True,
+              n_sims: int = DEFAULT_SIMS, keep_weekly: bool = True,
               seed: int | None = 2026) -> Artifacts:
     """Rebuild projections, run the season simulation and assemble the draft board."""
     global _CACHE

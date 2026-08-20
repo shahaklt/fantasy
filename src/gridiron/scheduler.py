@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .config import ARTIFACT_DIR
+from .config import ARTIFACT_DIR, DEFAULT_SIMS
 
 log = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ class Scheduler:
             return []
 
 
-def build_default_scheduler(times=DEFAULT_TIMES, n_sims: int = 5000,
+def build_default_scheduler(times=DEFAULT_TIMES, n_sims: int = DEFAULT_SIMS,
                             router=None) -> Scheduler:
     """Scheduler wired to the standard refresh jobs."""
     from . import pipeline

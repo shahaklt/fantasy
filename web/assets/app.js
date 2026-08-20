@@ -1,5 +1,5 @@
 // Application shell: routing, keyboard control, live machine readout.
-import { $, $$, api, el, fmt, led, toast } from './ui.js';
+import { $, $$, api, el, fmt, led, SIMS, toast } from './ui.js';
 import { dashboard, myLeague, projections, settings, store } from './views1.js';
 import { draft, games, live, markets } from './views2.js';
 import { guide } from './guide.js';
@@ -244,7 +244,7 @@ function wire() {
   $('#btn-rebuild').addEventListener('click', async (e) => {
     e.target.disabled = true; e.target.textContent = 'queued';
     try {
-      const r = await api.post('/api/rebuild', { n_sims: 5000 });
+      const r = await api.post('/api/rebuild', { n_sims: SIMS });
       toast(r.started ? 'rebuilding in the background' : r.detail);
     } catch (err) { toast(String(err), true); }
     e.target.disabled = false; e.target.textContent = 'Rebuild sims';

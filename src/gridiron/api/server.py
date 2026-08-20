@@ -27,7 +27,7 @@ from ..analysis.compare import (accuracy_scorecard, agreement_stats, disagreemen
                                 roster_report, season_comparison, weekly_comparison)
 from ..data.espn import (EspnCredentials, EspnLeague, espn_available,
                          load_roster, save_roster)
-from ..config import REPO_ROOT, current_season, detect_backend
+from ..config import DEFAULT_SIMS, REPO_ROOT, current_season, detect_backend
 from ..draft import DraftSimulator, DraftState, positional_scarcity
 from ..exchange.base import Action, OrderType, PaperBroker, Side, TradingMode
 from ..exchange.demo import DemoVenue, demo_enabled
@@ -492,7 +492,7 @@ def draft_scarcity():
 # --------------------------------------------------------------------------------------
 # Games
 # --------------------------------------------------------------------------------------
-def _games(week: int, n_sims: int = 8000):
+def _games(week: int, n_sims: int = DEFAULT_SIMS):
     key = (week, n_sims)
     cached = state.game_cache.get(key)
     if cached:

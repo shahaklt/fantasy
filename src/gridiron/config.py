@@ -128,6 +128,25 @@ def detect_backend() -> Backend:
     return Backend(name="cpu-torch", library="torch", device="cpu")
 
 
+# How many Monte Carlo runs every simulation does by default.
+#
+# One constant rather than a number per call site: they had drifted to five
+# different values, so "how many runs is this?" had five answers depending on
+# which screen you were looking at. The engine chunks by available memory, so
+# raising this costs time, not RAM.
+#
+# The draft recommender is deliberately NOT on this number — see
+# DRAFT_SIMS below.
+DEFAULT_SIMS = 20_000
+
+# The draft recommender simulates the remainder of the draft once per run per
+# candidate, in Python, so its cost is roughly 1,200x a season run. Measured at
+# 90ms per run across a 12-candidate slate on a 4-core box: 20,000 would take
+# half an hour, with a draft clock going. This is the largest count that still
+# returns inside a normal pick timer.
+DRAFT_SIMS = 600
+
+
 def sim_chunk_size(n_entities: int, backend: Backend | None = None) -> int:
     """How many simulations to run per chunk so intermediate arrays stay in memory.
 
