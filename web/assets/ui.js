@@ -73,6 +73,11 @@ export const api = {
     if (!r.ok) throw await failure(r);
     return r.json();
   },
+  async del(path) {
+    const r = await fetch(path, { method: 'DELETE' });
+    if (!r.ok) throw await failure(r);
+    return r.json();
+  },
 };
 
 // ------------------------------------------------------------------- tables

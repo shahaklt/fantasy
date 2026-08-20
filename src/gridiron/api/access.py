@@ -80,6 +80,12 @@ class AccessSettings:
     required: bool = False
     host: str = "127.0.0.1"
     port: int = 8000
+    lan_port: int | None = None      # set when the on-demand listener is running
+
+    @property
+    def pairing_port(self) -> int:
+        """The port a phone should actually be sent to."""
+        return self.lan_port or self.port
 
 
 def _settings_from_env() -> AccessSettings:

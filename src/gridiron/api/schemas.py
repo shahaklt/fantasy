@@ -89,6 +89,12 @@ class EspnCredentialsRequest(BaseModel):
     team_id: int | None = None
 
 
+class EspnTeamRequest(BaseModel):
+    """Which team in the league is yours. Saved the moment it is picked."""
+
+    team_id: int = Field(ge=1)
+
+
 class EspnSyncRequest(BaseModel):
     """What to pull across from ESPN. All on by default -- connect once, done."""
 

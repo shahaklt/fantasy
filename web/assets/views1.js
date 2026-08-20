@@ -206,95 +206,150 @@ export async function playerDrawer(playerId) {
 }
 
 // ------------------------------------------------------------------ SETTINGS
-/** Everything needed to open this panel on a phone, without typing a token. */
+/** Everything needed to open this panel on a phone, without typing a token.
+ *
+ * The panel re-renders itself in place rather than re-rendering the settings
+ * view, so turning access on does not wipe whatever the fetch buttons above it
+ * just wrote.
+ */
 async function phoneAccessPanel() {
-  let acc;
-  try {
-    acc = await api.get('/api/access');
-  } catch (err) {
-    return panel('Phone access', el('div', { class: 'note bad' }, String(err)));
+  const host = el('div', {});
+
+  async function render() {
+    let acc;
+    try {
+      acc = await api.get('/api/access');
+    } catch (err) {
+      host.replaceChildren(panel('Phone access', el('div', { class: 'note bad' }, String(err))));
+      return;
+    }
+    host.replaceChildren(acc.local ? localView(acc) : pairedView());
   }
 
-  const body = el('div', {});
+  function pairedView() {
+    // Reached from the phone itself. Handing the token back over the wire
+    // would defeat the point of having one.
+    return panel('Phone access', el('div', { class: 'note' },
+      'This device is paired. The pairing link, token and QR code are only readable '
+      + 'from the machine running the server.'), { actions: [led('on')] });
+  }
 
-  if (!acc.required) {
-    body.append(
+  function toggleButton(acc) {
+    if (!acc.can_toggle) return null;      // bound at startup; cannot be given back
+
+    if (!acc.on_network) {
+      return el('button', {
+        class: 'btn primary',
+        onclick: async (e) => {
+          const ok = confirm(
+            'Put this panel on your wifi?\n\n'
+            + 'Every device on the network will be able to reach it, but only with the '
+            + 'access token — which the QR code carries. This machine stays exempt.');
+          if (!ok) return;
+          e.target.disabled = true; e.target.textContent = 'opening';
+          try {
+            const r = await api.post('/api/access/enable');
+            toast(r.already ? 'already on the network' : `phone access on, port ${r.port}`);
+          } catch (err) { toast(String(err), true); }
+          render();
+        },
+      }, 'Turn on phone access');
+    }
+
+    return el('button', {
+      class: 'btn danger sm',
+      onclick: async (e) => {
+        e.target.disabled = true; e.target.textContent = 'closing';
+        try {
+          await api.post('/api/access/disable');
+          toast('phone access off');
+        } catch (err) { toast(String(err), true); }
+        render();
+      },
+    }, 'Turn off');
+  }
+
+  function offView(acc) {
+    const body = el('div', {},
       el('div', { class: 'note' },
-        'The server is bound to this machine only, so nothing else on the network can '
-        + 'reach it. To use the panel on your phone, restart it with:'),
-      el('div', { class: 'roster-slot', style: 'margin-top:8px' },
-        el('code', {}, './run.sh --lan'), el('span', { class: 'dim' }, 'macOS / Linux')),
-      el('div', { class: 'roster-slot' },
-        el('code', {}, 'run.bat --lan'), el('span', { class: 'dim' }, 'Windows')),
-      el('div', { class: 'note', style: 'margin-top:10px' },
-        'That binds every interface and puts an access token in front of anything that '
-        + 'is not this machine. The terminal then prints a QR code to scan.'),
+        'The panel is bound to this machine only, so nothing else on the network can '
+        + 'reach it. Turning phone access on opens a second listener on every interface '
+        + 'and puts an access token in front of it. Nothing restarts, so the simulation '
+        + 'cache and any draft in progress survive.'),
+      el('div', { style: 'margin-top:10px' }, toggleButton(acc)),
       ...((acc.lan_addresses || []).length
-        ? [kv('would be reachable at', `${acc.lan_addresses[0]}:${acc.port}`)]
-        : []));
+        ? [kv('this machine is', acc.lan_addresses[0])]
+        : []),
+      el('div', { class: 'note', style: 'margin-top:10px' },
+        'Prefer it on from the start? Launch with ./run.sh --lan (Windows: run.bat --lan).'));
     return panel('Phone access', body, { actions: [led('off')] });
   }
 
-  if (!acc.local) {
-    // Reached from the phone itself: it is already paired, and handing the
-    // token back over the wire would defeat the point of having one.
-    body.append(el('div', { class: 'note' },
-      'This device is paired. The pairing link, token and QR code are only readable '
-      + 'from the machine running the server.'));
+  function onView(acc) {
+    const link = el('input', { value: acc.url, readonly: 'readonly',
+      onclick: (e) => e.target.select(), style: 'width:100%' });
+
+    const body = el('div', {},
+      el('div', { class: 'note', style: 'margin-bottom:10px' },
+        'Scan this with your phone camera while it is on the same wifi. The link carries '
+        + 'the token, so the device is remembered after the first load.'),
+      acc.qr
+        ? el('div', { class: 'qr', html: acc.qr })
+        : el('div', { class: 'note bad' },
+            'No QR code — install segno (pip install segno) and restart to get one.'),
+      el('div', { style: 'margin-top:10px' }, link),
+      el('div', { style: 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap' },
+        el('button', {
+          class: 'btn sm',
+          onclick: async (e) => {
+            try {
+              await navigator.clipboard.writeText(acc.url);
+              toast('link copied');
+            } catch { link.select(); toast('select and copy the link', true); }
+            e.target.blur();
+          },
+        }, 'Copy link'),
+        el('button', {
+          class: 'btn sm',
+          onclick: async (e) => {
+            if (!confirm('Issue a new token? Every paired device will have to scan again.')) return;
+            e.target.disabled = true;
+            try { await api.post('/api/access/rotate'); toast('new token issued'); }
+            catch (err) { toast(String(err), true); }
+            render();
+          },
+        }, acc.pinned_by_env ? 'Token pinned by env' : 'Rotate token'),
+        toggleButton(acc)),
+      kv('token', acc.token),
+      ...(acc.listener_port ? [kv('listening on', `0.0.0.0:${acc.listener_port}`)] : []),
+      ...(acc.alternates || []).map((u) => kv('also reachable at', u)),
+      el('div', { class: 'note', style: 'margin-top:10px' },
+        acc.url.startsWith('https://')
+          ? 'That is an HTTPS origin, so the phone can install the panel as a real app '
+            + '(Add to Home Screen) and open it offline.'
+          : 'Over plain wifi the browser will not install this as an offline app — that '
+            + 'needs HTTPS. iOS Add to Home Screen still gives you a full-screen icon. '
+            + 'For a properly installable app, or for access away from home, start the '
+            + 'server with --tunnel, or put it behind Tailscale.'),
+      ...(acc.can_toggle
+        ? []
+        : [el('div', { class: 'note' },
+            'This server was started with --lan, so the network binding belongs to the '
+            + 'process. Restart it without that flag to take the panel off the network.')]),
+      ...(acc.tunnel_available
+        ? [el('div', { class: 'note' }, 'cloudflared is installed: ./run.sh --tunnel exposes '
+            + 'the panel off your network, still behind this token.')]
+        : []));
+
     return panel('Phone access', body, { actions: [led('on')] });
   }
 
-  const link = el('input', { value: acc.url, readonly: 'readonly',
-    onclick: (e) => e.target.select(), style: 'width:100%' });
+  function localView(acc) {
+    return acc.on_network ? onView(acc) : offView(acc);
+  }
 
-  body.append(
-    el('div', { class: 'note', style: 'margin-bottom:10px' },
-      'Scan this with your phone camera while it is on the same wifi. The link carries '
-      + 'the token, so the device is remembered after the first load.'),
-    acc.qr
-      ? el('div', { class: 'qr', html: acc.qr })
-      : el('div', { class: 'note bad' },
-          'No QR code — install segno (pip install segno) and restart to get one.'),
-    el('div', { style: 'margin-top:10px' }, link),
-    el('div', { style: 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap' },
-      el('button', {
-        class: 'btn sm',
-        onclick: async (e) => {
-          try {
-            await navigator.clipboard.writeText(acc.url);
-            toast('link copied');
-          } catch { link.select(); toast('select and copy the link', true); }
-          e.target.blur();
-        },
-      }, 'Copy link'),
-      el('button', {
-        class: 'btn sm danger',
-        onclick: async (e) => {
-          if (!confirm('Issue a new token? Every paired device will have to scan again.')) return;
-          e.target.disabled = true;
-          try {
-            await api.post('/api/access/rotate');
-            toast('new token issued');
-            settings(document.querySelector('#view'));
-          } catch (err) { toast(String(err), true); e.target.disabled = false; }
-        },
-      }, acc.pinned_by_env ? 'Token pinned by env' : 'Rotate token')),
-    kv('token', acc.token),
-    ...(acc.alternates || []).map((u) => kv('also reachable at', u)),
-    el('div', { class: 'note', style: 'margin-top:10px' },
-      acc.url.startsWith('https://')
-        ? 'That is an HTTPS origin, so the phone can install the panel as a real app '
-          + '(Add to Home Screen) and open it offline.'
-        : 'Over plain wifi the browser will not install this as an offline app — that '
-          + 'needs HTTPS. iOS Add to Home Screen still gives you a full-screen icon. '
-          + 'For a properly installable app, or for access away from home, start the '
-          + 'server with --tunnel, or put it behind Tailscale.'),
-    ...(acc.tunnel_available
-      ? [el('div', { class: 'note' }, 'cloudflared is installed: ./run.sh --tunnel exposes '
-          + 'the panel off your network, still behind this token.')]
-      : []));
-
-  return panel('Phone access', body, { actions: [led('on')] });
+  await render();
+  return host;
 }
 
 

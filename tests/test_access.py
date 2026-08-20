@@ -168,3 +168,92 @@ def test_qr_encodes_the_pairing_url():
     svg = net.qr_svg("http://192.168.1.4:8000/?t=abc")
     assert svg is not None and svg.startswith("<svg") and "path" in svg
     assert net.qr_terminal("http://192.168.1.4:8000/?t=abc")
+
+
+# ------------------------------------------------------- turning it on live
+@pytest.fixture
+def loopback_bind(tmp_path, monkeypatch):
+    """A server bound to this machine only, which is the toggleable case."""
+    from gridiron.api import lan
+
+    monkeypatch.delenv("GRIDIRON_TOKEN", raising=False)
+    monkeypatch.setattr(access, "TOKEN_PATH", tmp_path / "access_token")
+    monkeypatch.setattr(access.settings, "required", False)
+    monkeypatch.setattr(access.settings, "host", "127.0.0.1")
+    monkeypatch.setattr(access.settings, "port", 8931)
+    monkeypatch.setattr(access.settings, "lan_port", None)
+    yield
+    lan.listener.stop()
+    access.settings.required = False
+    access.settings.lan_port = None
+
+
+def test_the_panel_starts_off_the_network(loopback_bind):
+    with local_client() as client:
+        body = client.get("/api/access").json()
+        assert body["on_network"] is False
+        assert body["can_toggle"] is True, "a loopback bind can be opened without a restart"
+
+
+def test_the_button_opens_a_guarded_listener(loopback_bind):
+    """The gate has to be up before the socket is, not after."""
+    import urllib.error
+    import urllib.request
+
+    from gridiron.api import lan
+
+    with local_client() as client:
+        body = client.post("/api/access/enable").json()
+        assert body["enabled"] and body["qr"]
+        assert lan.listener.active
+        assert access.settings.required is True
+
+        url = f"http://127.0.0.1:{body['port']}/api/status"
+        # Shaped like a request from another device: no token, no entry.
+        req = urllib.request.Request(url, headers={"x-forwarded-for": "203.0.113.9"})
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(req, timeout=5)
+        assert caught.value.code == 401
+
+        req.add_header(access.HEADER, body["token"])
+        assert urllib.request.urlopen(req, timeout=5).status == 200
+
+
+def test_turning_it_off_closes_the_socket(loopback_bind):
+    import socket
+
+    from gridiron.api import lan
+
+    with local_client() as client:
+        port = client.post("/api/access/enable").json()["port"]
+        assert client.post("/api/access/disable").json()["enabled"] is False
+        assert not lan.listener.active
+        assert access.settings.required is False
+
+        probe = socket.socket()
+        probe.settimeout(2)
+        try:
+            assert probe.connect_ex(("127.0.0.1", port)) != 0, "the port is still accepting"
+        finally:
+            probe.close()
+
+
+def test_a_phone_cannot_toggle_access(loopback_bind):
+    """Otherwise a paired device could quietly take the panel off the network."""
+    with local_client() as client:
+        token = client.post("/api/access/enable").json()["token"]
+    with phone_client() as client:
+        for path in ("/api/access/enable", "/api/access/disable"):
+            assert client.post(path, headers={access.HEADER: token}).status_code == 403
+
+
+def test_a_startup_lan_bind_reports_itself_as_untoggleable(tmp_path, monkeypatch):
+    """--lan owns the socket; the UI must not offer a button that cannot work."""
+    monkeypatch.setattr(access, "TOKEN_PATH", tmp_path / "access_token")
+    monkeypatch.setattr(access.settings, "required", True)
+    monkeypatch.setattr(access.settings, "host", "0.0.0.0")
+    with local_client() as client:
+        body = client.get("/api/access").json()
+        assert body["on_network"] is True and body["can_toggle"] is False
+        assert client.post("/api/access/enable").json()["already"] is True
+        assert client.post("/api/access/disable").status_code == 400

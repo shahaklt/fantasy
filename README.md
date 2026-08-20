@@ -60,6 +60,13 @@ modern desktop). The draft board is usable while that finishes.
 
 ## On your phone
 
+Already have it running? Open **Settings → Phone access** and press **Turn on
+phone access**. That opens a second listener on every interface, puts the token
+in front of it and shows the QR code — without restarting, so the warm
+simulation cache and any draft in progress survive. **Turn off** closes it again.
+
+To have it on from the start instead:
+
 ```bash
 ./run.sh --lan               # Windows: run.bat --lan
 ```
@@ -98,6 +105,10 @@ credentials and can place orders. So from that point everything is gated:
 
 Rotate the token from Settings, or with `gridiron pair --rotate`. Pin it
 yourself with `GRIDIRON_TOKEN=...` if you would rather it not change.
+
+A server started with `--lan` owns its socket for the life of the process, so
+the Settings button reports that and stops offering to close something it
+cannot. Restart without the flag to take it back off the network.
 
 ### Away from home
 
@@ -248,9 +259,16 @@ draft onto the board rather than making you re-enter it pick by pick. And
 *My roster vs ESPN* shows where ESPN under- and over-rates the players you
 already own, which is what decides whether to buy or sell them.
 
+Pick your team once, from the dropdown in the ESPN view. It saves the moment
+you choose it, and everything afterwards — sync, My League, start/sit, the
+roster comparison — uses it without asking again. *Forget* clears it if you
+change teams or leagues, leaving your cookies alone.
+
 Cookies live in `data/user/espn_credentials.json` with owner-only permissions
 and are sent nowhere but ESPN. They expire every few months; re-copy them if a
-working connection starts failing.
+working connection starts failing — re-saving them keeps your team selection.
+The synced roster is kept in `data/user/espn_roster.json`, so it is still there
+after a restart.
 
 ### Set up your league first
 **Settings** → teams, scoring preset, roster slots, your draft slot → *Save &
