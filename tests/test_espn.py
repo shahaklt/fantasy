@@ -265,3 +265,82 @@ class TestWeeklyAccuracy:
 
 def test_library_is_installed():
     assert espn_available(), "pip install espn_api"
+
+
+class TestTheTeamSticks:
+    """Picking your own team is a one-time act, not a per-visit chore."""
+
+    @pytest.fixture
+    def store(self, tmp_path, monkeypatch):
+        from gridiron.data import espn as mod
+
+        monkeypatch.delenv("ESPN_LEAGUE_ID", raising=False)
+        monkeypatch.setattr(mod, "CREDENTIALS_PATH", tmp_path / "espn_credentials.json")
+        monkeypatch.setattr(mod, "ROSTER_PATH", tmp_path / "espn_roster.json")
+        return mod
+
+    def test_the_team_survives_a_reload(self, store):
+        EspnCredentials(12345, "s2", "{swid}", 2026, team_id=7).save()
+        assert EspnCredentials.load().team_id == 7
+
+    def test_refreshing_cookies_does_not_forget_the_team(self, store):
+        """The bug this covers: an expired espn_s2 used to cost you the team too."""
+        from fastapi.testclient import TestClient
+
+        from gridiron.api.server import app
+
+        EspnCredentials(12345, "old", "{swid}", 2026, team_id=7).save()
+        with TestClient(app, client=("127.0.0.1", 5000)) as client:
+            client.post("/api/espn/credentials",
+                        json={"league_id": 12345, "espn_s2": "fresh", "swid": "{swid}"})
+        reloaded = EspnCredentials.load()
+        assert reloaded.espn_s2 == "fresh"
+        assert reloaded.team_id == 7, "re-saving cookies must not reset the team"
+
+    def test_a_different_league_starts_clean(self, store):
+        """Team ids are league-scoped, so carrying one across leagues is wrong."""
+        from fastapi.testclient import TestClient
+
+        from gridiron.api.server import app
+
+        EspnCredentials(12345, "s2", "{swid}", 2026, team_id=7).save()
+        with TestClient(app, client=("127.0.0.1", 5000)) as client:
+            client.post("/api/espn/credentials",
+                        json={"league_id": 99999, "espn_s2": "s2", "swid": "{swid}"})
+        assert EspnCredentials.load().team_id is None
+
+    def test_the_roster_survives_a_restart(self, store):
+        """In-memory only meant every restart silently emptied My League."""
+        store.save_roster(["p001", "p002"], {"team_id": 7, "team_name": "Squad"})
+        back = store.load_roster()
+        assert back["player_ids"] == ["p001", "p002"]
+        assert back["team"]["team_name"] == "Squad"
+        assert back["synced_at"]
+
+    def test_the_saved_roster_is_not_world_readable(self, store):
+        store.save_roster(["p001"], None)
+        assert store.ROSTER_PATH.stat().st_mode & 0o077 == 0
+
+    def test_a_corrupt_roster_file_does_not_break_startup(self, store):
+        store.ROSTER_PATH.write_text("{ this is not json")
+        assert store.load_roster() == {"player_ids": [], "team": None, "synced_at": None}
+
+    def test_status_reports_the_saved_team(self, store):
+        """Without this the picker has nothing to pre-select and asks again."""
+        from fastapi.testclient import TestClient
+
+        from gridiron.api.server import app
+
+        EspnCredentials(12345, "s2", "{swid}", 2026, team_id=7).save()
+        with TestClient(app, client=("127.0.0.1", 5000)) as client:
+            body = client.get("/api/espn/status").json()
+        assert body["configured"] is True
+        assert body["team_id"] == 7
+
+    def test_setting_a_team_without_a_league_is_refused(self, store):
+        from fastapi.testclient import TestClient
+
+        from gridiron.api.server import app
+
+        with TestClient(app, client=("127.0.0.1", 5000)) as client:
+            assert client.post("/api/espn/team", json={"team_id": 3}).status_code == 400

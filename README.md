@@ -58,6 +58,83 @@ The first launch creates a virtualenv, installs dependencies, downloads roughly
 150 MB of nflverse data and runs the first simulation (about a minute on a
 modern desktop). The draft board is usable while that finishes.
 
+## On your phone
+
+Already have it running? Open **Settings → Phone access** and press **Turn on
+phone access**. That opens a second listener on every interface, puts the token
+in front of it and shows the QR code — without restarting, so the warm
+simulation cache and any draft in progress survive. **Turn off** closes it again.
+
+To have it on from the start instead:
+
+```bash
+./run.sh --lan               # Windows: run.bat --lan
+```
+
+The terminal prints a QR code. Point your phone's camera at it while the phone
+is on the same wifi, and the panel opens. That is the whole setup.
+
+```
+Open on your phone  (same wifi as this machine)
+  http://192.168.1.24:8000/?t=lMSGhjusUkO5t0qfv5SLNQ
+
+  █████████████████████████████
+  ████ ▄▄▄▄▄ █▀ █ █▀ █ ▄▄▄▄▄ ██
+  ████ █   █ █ █▀██▄██ █   █ ██
+  ...
+
+  access token: lMSGhjusUkO5t0qfv5SLNQ
+```
+
+The link carries an access token, and the browser keeps it, so you scan once
+per device. The same QR code is on the Settings screen under **Phone access**,
+along with a rotate button that unpairs every device at once.
+
+### Why there is a token at all
+
+On loopback the only client is you, so `./run.sh` asks for nothing. `--lan`
+puts the panel on the network — and with it the endpoints that read your league
+credentials and can place orders. So from that point everything is gated:
+
+| | |
+| --- | --- |
+| requests from this machine | always allowed, no token |
+| every other device | token required, on every path including the websocket |
+| the token itself | only ever readable from this machine |
+| a request arriving through a tunnel | never counted as local, even though it dials in over loopback |
+
+Rotate the token from Settings, or with `gridiron pair --rotate`. Pin it
+yourself with `GRIDIRON_TOKEN=...` if you would rather it not change.
+
+A server started with `--lan` owns its socket for the life of the process, so
+the Settings button reports that and stops offering to close something it
+cannot. Restart without the flag to take it back off the network.
+
+### Away from home
+
+Two options, both giving real HTTPS, which also makes the panel installable as
+an app rather than just a bookmark:
+
+```bash
+./run.sh --tunnel            # needs cloudflared on PATH; public URL, still behind the token
+tailscale serve 8000         # private to your own devices, nothing public
+```
+
+Tailscale is the better default: the tunnel URL is reachable by anyone who
+learns it, and only the token stands in front of it.
+
+### Installing it
+
+Over HTTPS (tunnel or Tailscale) both iOS and Android offer to install the
+panel, and it opens full-screen with the shell cached — so it launches instantly
+and still renders if the wifi drops. It never serves cached projections: if the
+server is unreachable the readout says so rather than showing you yesterday's
+numbers.
+
+Over plain wifi (`--lan`) Android will not install it, because browsers only
+allow that on a secure origin. iOS *Add to Home Screen* still gives you a
+full-screen icon.
+
 ## Updating
 
 ```bash
@@ -182,9 +259,16 @@ draft onto the board rather than making you re-enter it pick by pick. And
 *My roster vs ESPN* shows where ESPN under- and over-rates the players you
 already own, which is what decides whether to buy or sell them.
 
+Pick your team once, from the dropdown in the ESPN view. It saves the moment
+you choose it, and everything afterwards — sync, My League, start/sit, the
+roster comparison — uses it without asking again. *Forget* clears it if you
+change teams or leagues, leaving your cookies alone.
+
 Cookies live in `data/user/espn_credentials.json` with owner-only permissions
 and are sent nowhere but ESPN. They expire every few months; re-copy them if a
-working connection starts failing.
+working connection starts failing — re-saving them keeps your team selection.
+The synced roster is kept in `data/user/espn_roster.json`, so it is still there
+after a restart.
 
 ### Set up your league first
 **Settings** → teams, scoring preset, roster slots, your draft slot → *Save &
@@ -402,6 +486,9 @@ On Windows, Task Scheduler running `run.bat` with the same two triggers.
 
 ```
 gridiron serve [--port 8000] [--demo]   start the web app
+gridiron serve --lan                    serve it to phones on your wifi
+gridiron serve --tunnel                 also expose it off your network
+gridiron pair [--rotate]                reprint the pairing QR, or issue a new token
 gridiron refresh                        pull the latest data
 gridiron build --sims 20000             rebuild projections and simulations
 gridiron validate                       check the model against history
@@ -419,6 +506,7 @@ gridiron doctor                         check GPU, data sources, venues, trading
 ```
 src/gridiron/
   config.py          paths, backend detection, VRAM-aware chunking
+  net.py             LAN address discovery and QR pairing
   scoring.py         league settings and fantasy point arithmetic
   data/              nflverse + market loaders, ESPN league adapter, parquet cache
   features/          team context, player usage and efficiency profiles
@@ -429,12 +517,15 @@ src/gridiron/
   exchange/          Kalshi, Polymarket, paper broker, risk guard, tick store
   analysis/          game predictions, breakdowns, and the ESPN comparison
   api/               FastAPI server
+    access.py        the token gate for anything that is not this machine
   cli.py             command line
 web/                 single-page frontend (no build step, no CDN)
   assets/guide-data.js   the stats reference content
   assets/guide.js        the Stats Guide view
-scripts/             calibration and validation
-tests/               170 tests
+  manifest.webmanifest   installable-app metadata
+  sw.js                  service worker: caches the shell, never the data
+scripts/             calibration and validation, icon generation
+tests/               194 tests
 ```
 
 ## Tests
@@ -467,3 +558,8 @@ on a box that has a GPU.
 - Market edges are computed against a model that has *not* been validated
   out-of-sample against market prices — treat them as a starting point for your
   own research, not a signal to size up on.
+- The phone layout was built and checked in a real browser at 390×844, but not
+  on physical iOS or Android hardware. The token gate, the QR pairing and the
+  offline shell are covered by tests and were exercised end to end locally; the
+  install prompt itself needs an HTTPS origin, which means a tunnel or
+  Tailscale, and that path has not been run from this machine.

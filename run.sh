@@ -32,4 +32,8 @@ if [ "${GPU:-auto}" != "off" ] && ! python -c "import cupy" 2>/dev/null; then
   fi
 fi
 
-exec python -m gridiron.cli serve --host "${HOST:-127.0.0.1}" --port "${PORT:-8000}" "$@"
+# LAN=1 ./run.sh  is the same as  ./run.sh --lan  (serve to phones on this wifi)
+EXTRA=()
+if [ "${LAN:-0}" = "1" ]; then EXTRA+=(--lan); fi
+
+exec python -m gridiron.cli serve --host "${HOST:-127.0.0.1}" --port "${PORT:-8000}" "${EXTRA[@]+"${EXTRA[@]}"}" "$@"

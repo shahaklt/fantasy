@@ -107,23 +107,67 @@ async function loadLeague(body, root) {
     const teams = d.teams || [];
     const status = await api.get('/api/espn/status').catch(() => ({}));
 
-    const picker = el('select', { id: 'espn-team' },
+    const saved = status.team_id != null ? Number(status.team_id) : null;
+    const state = el('div', { class: 'note', style: 'margin-top:9px' });
+
+    function describe(teamName, count) {
+      if (saved == null && !teamName) {
+        state.className = 'note warn';
+        state.textContent = 'No team picked yet — choose yours above and it will be saved.';
+        return;
+      }
+      state.className = 'note';
+      state.textContent = `Saved: ${teamName || `team #${saved}`}`
+        + (count != null ? ` · ${count} players matched to the board` : '')
+        + '. Every view uses this until you change it.';
+    }
+
+    // Saving on change, rather than only as a side effect of Sync, is the
+    // whole point: picking your own team is not something to redo each visit.
+    const picker = el('select', {
+      id: 'espn-team',
+      onchange: async (e) => {
+        const value = e.target.value;
+        if (!value) return;
+        e.target.disabled = true;
+        try {
+          const r = await api.post('/api/espn/team', { team_id: Number(value) });
+          describe(r.team ? r.team.team_name : null, r.matched);
+          toast(`saved ${r.team ? r.team.team_name : `team #${value}`} as your team`);
+        } catch (err) { toast(String(err), true); }
+        e.target.disabled = false;
+      },
+    },
       el('option', { value: '' }, 'Which team is yours?'),
       teams.map((t) => el('option', {
         value: t.team_id,
-        selected: status.team_id && Number(status.team_id) === Number(t.team_id) ? 'selected' : null,
+        selected: saved != null && saved === Number(t.team_id) ? 'selected' : null,
       }, `${t.team_name}${t.owner ? ` — ${t.owner}` : ''}`)));
+
+    describe(status.team_name, status.roster_synced || null);
 
     body.append(panel('Your team',
       el('div', {},
         el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' },
           picker,
-          el('button', { class: 'btn primary', onclick: (e) => runSync(e, root) }, 'Sync my league')),
+          el('button', { class: 'btn primary', onclick: (e) => runSync(e, root) }, 'Sync my league'),
+          saved != null
+            ? el('button', {
+                class: 'btn ghost sm',
+                onclick: async (e) => {
+                  if (!confirm('Forget your saved team and roster? Cookies are kept.')) return;
+                  e.target.disabled = true;
+                  try { await api.del('/api/espn/team'); toast('team forgotten'); espn(root); }
+                  catch (err) { toast(String(err), true); e.target.disabled = false; }
+                },
+              }, 'Forget')
+            : null),
+        state,
         el('div', { class: 'note', style: 'margin-top:9px' },
           'Syncing imports your league’s scoring and roster slots, your players, your '
           + 'completed draft picks and your weekly matchups. My League and the Draft Room '
           + 'then use them directly — no second setup.')),
-      { meta: 'one-time setup' }));
+      { meta: saved != null ? 'saved' : 'one-time setup' }));
 
     body.append(panel('League teams',
       table(teams, [
@@ -263,7 +307,13 @@ async function runSync(evt, root) {
   const btn = evt.target;
   btn.disabled = true; btn.textContent = 'syncing';
   const picked = document.getElementById('espn-team');
-  const teamId = picked && picked.value ? Number(picked.value) : null;
+  // Falling back to the saved team matters: an untouched picker used to send
+  // null, and the sync then had no team to import a roster for.
+  let teamId = picked && picked.value ? Number(picked.value) : null;
+  if (teamId == null) {
+    const st = await api.get('/api/espn/status').catch(() => ({}));
+    teamId = st.team_id != null ? Number(st.team_id) : null;
+  }
   try {
     const d = await api.post('/api/espn/sync', {
       settings: true, roster: true, draft: true, schedule: true, team_id: teamId,

@@ -54,6 +54,7 @@
   /* ---- semantic stacking order ---- */
   --z-sticky: 100;
   --z-readout: 200;
+  --z-tabbar: 250;
   --z-drawer-scrim: 300;
   --z-drawer: 310;
   --z-palette: 400;
@@ -81,7 +82,7 @@ body {
   background-size: 40px 40px, 40px 40px;
 }
 
-#app { display: flex; height: 100vh; overflow: hidden; }
+#app { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
 
 ::selection { background: var(--accent); color: var(--bg); }
 
@@ -217,6 +218,7 @@ body {
 .btn.sm { padding: 3px 8px; font-size: 10px; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--line-hi); color: var(--ink); }
+.btn .btn-icon { display: none; font-style: normal; }
 
 input, select, textarea {
   background: var(--bg); border: 1px solid var(--line-hi); color: var(--ink);
@@ -272,9 +274,14 @@ kbd {
 .panel-actions { display: flex; gap: 6px; align-items: center; }
 
 .grid { display: grid; gap: var(--gap); }
-.g2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
-.g3 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-.g4 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.g2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.g3 { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+.g4 { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); }
+
+/* Named layouts, so the phone breakpoint can collapse them. */
+.split { grid-template-columns: minmax(0, 2.1fr) minmax(300px, 1fr); gap: 14px; }
+.split-head { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; margin-bottom: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr)); gap: 14px; }
 
 /* ===========================================================================
    READOUTS — instrument tiles, deliberately not the big-number hero template
@@ -389,6 +396,11 @@ tbody tr:hover td.name { color: var(--accent); }
 .score { font: 600 15px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 
 .spark { display: block; }
+
+/* Pairing QR. Sized to scan comfortably from arm's length and no larger; the
+   quiet zone is baked into the SVG. */
+.qr { width: 168px; max-width: 100%; line-height: 0; border: 1px solid var(--line); }
+.qr svg { display: block; width: 100%; height: auto; }
 
 /* ===========================================================================
    DRAWER
@@ -539,8 +551,159 @@ tbody tr:hover td.name { color: var(--accent); }
   .led.busy { animation: none; opacity: 1; }
 }
 
+/* ===========================================================================
+   PHONE CHROME — a bottom tab bar and an overflow sheet.
+
+   Both are inert on a desktop viewport. They are built from the same view
+   table the sidebar uses, so a new view appears in both or in neither.
+   ======================================================================== */
+.tabbar, .sheet { display: none; }
+
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-tabbar);
+  grid-template-columns: repeat(5, 1fr);
+  background: var(--panel); border-top: 1px solid var(--line-hi);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tabbar button {
+  display: grid; place-items: center; gap: 3px;
+  min-height: 54px; padding: 6px 2px;
+  background: none; border: 0; border-top: 2px solid transparent;
+  color: var(--ink-3); font: 9px/1 var(--mono); letter-spacing: 0.04em;
+  text-transform: uppercase; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tabbar button i { font-style: normal; font-size: 17px; line-height: 1; }
+.tabbar button.active { color: var(--accent); border-top-color: var(--accent); }
+.tabbar button.active i { text-shadow: 0 0 10px rgba(61, 219, 217, 0.5); }
+
+.sheet { position: fixed; inset: 0; z-index: var(--z-palette); }
+.sheet.open { display: block; }
+.sheet::before {
+  content: ""; position: absolute; inset: 0; background: rgba(2, 5, 8, 0.74);
+  animation: fade var(--fast) var(--out);
+}
+.sheet-box {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: var(--panel); border-top: 1px solid var(--line-hi);
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  animation: rise var(--med) var(--out);
+}
+@keyframes rise { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
+.sheet-grip {
+  width: 34px; height: 3px; background: var(--line-hi);
+  margin: 9px auto 4px;
+}
+.sheet-list { display: grid; }
+.sheet-list button {
+  display: grid; grid-template-columns: 22px 1fr; align-items: center; gap: 12px;
+  padding: 14px 18px; min-height: 50px;
+  background: none; border: 0; border-top: 1px solid var(--line);
+  color: var(--ink-2); font: 12px/1 var(--mono); letter-spacing: 0.04em;
+  text-align: left; cursor: pointer;
+}
+.sheet-list button i { font-style: normal; color: var(--ink-3); font-size: 14px; }
+.sheet-list button.active { color: var(--accent); }
+.sheet-list button.active i { color: var(--accent); }
+
+/* ===========================================================================
+   PHONE LAYOUT
+   ======================================================================== */
 @media (max-width: 760px) {
-  .sidebar { width: 56px; flex-basis: 56px; }
-  .brand div, #nav button span, #nav button kbd, .sidebar-foot { display: none; }
-  #nav button { grid-template-columns: 1fr; justify-items: center; }
+  /* The sidebar's job moves to the tab bar; a 56px icon rail on a phone is
+     just a column of unlabelled glyphs eating a seventh of the screen. */
+  .sidebar { display: none; }
+  #app { flex-direction: column; }
+  .tabbar { display: grid; }
+
+  .topbar { height: 44px; flex-basis: 44px; padding: 0 8px; gap: 8px; }
+  #crumb { font-size: 11px; letter-spacing: 0.05em; }
+  .topbar-actions { gap: 4px; }
+  .topbar-actions .btn { min-width: 40px; min-height: 40px; padding: 0 10px;
+    display: inline-flex; align-items: center; justify-content: center; }
+  .topbar-actions .btn .btn-label { display: none; }
+  .topbar-actions .btn .btn-icon { display: inline; font-size: 15px; }
+
+  /* A toast squeezed between two icon buttons is unreadable, so on a phone it
+     becomes a bar above the tab bar instead. */
+  .topbar .toast {
+    position: fixed; left: 10px; right: 10px;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    max-width: none; white-space: normal; text-overflow: clip;
+    background: var(--panel-2); border: 1px solid var(--line-hi);
+    padding: 11px 12px; line-height: 1.5; z-index: var(--z-toast);
+    pointer-events: none;
+  }
+
+  .readout { flex-basis: 24px; }
+  .readout-cell { padding: 0 9px; }
+
+  #view { padding: 10px 10px calc(66px + env(safe-area-inset-bottom)); }
+  .grid { gap: 10px; }
+  .panel-body { padding: 10px; }
+
+  /* Tables scroll sideways only. Nesting a vertical scroller inside the page
+     scroller is the single worst thing you can do to a touch screen. */
+  .tbl-wrap { max-height: none; overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  table { font-size: 11px; }
+  th { padding: 9px 8px; }
+  td { height: 34px; padding: 0 8px; }
+  /* The name has to stay on screen while the numbers scroll past it. */
+  th:first-child, td:first-child {
+    position: sticky; left: 0; width: auto; max-width: 42vw;
+    overflow: hidden; text-overflow: ellipsis;
+    box-shadow: 1px 0 0 var(--line);
+  }
+  td:first-child { background: var(--panel); z-index: calc(var(--z-sticky) - 1); }
+  th:first-child { background: var(--panel-2); z-index: calc(var(--z-sticky) + 1); }
+  tbody tr:hover td:first-child { background: var(--panel-2); }
+
+  /* 16px or iOS zooms the whole page on focus and never zooms back. */
+  input, select, textarea { font-size: 16px; padding: 9px 10px; min-height: 42px; }
+  input[type=search] { min-width: 0; width: 100%; }
+  select { max-width: 100%; }
+  input[type=checkbox], input[type=radio] { min-height: 0; width: 18px; height: 18px; }
+  .controls { gap: 6px; }
+  .controls .btn, .seg button { min-height: 38px; }
+  .btn { padding: 9px 13px; }
+  .btn.sm { padding: 6px 9px; min-height: 32px; }
+
+  /* A drawer that flies in from the right is a desktop gesture; on a phone the
+     detail view comes up from the thumb. */
+  .drawer-inner {
+    left: 0; right: 0; top: auto; bottom: 0; width: auto;
+    height: 88dvh; border-left: 0; border-top: 1px solid var(--line-hi);
+    padding-bottom: env(safe-area-inset-bottom);
+    animation: rise var(--med) var(--out);
+  }
+  .drawer-head { padding: 12px; }
+  .drawer-close { width: 40px; height: 40px; font-size: 15px; }
+  .drawer-body { padding: 12px; }
+
+  .palette-box { margin: 0; width: 100%; height: 100dvh; border: 0;
+    padding-top: env(safe-area-inset-top); }
+  .palette-box input { font-size: 16px; padding: 15px 14px; }
+  .palette-list { max-height: calc(100dvh - 130px); }
+  .palette-item { padding: 13px 14px; min-height: 46px; }
+  .palette-hint { display: none; }
+
+  /* Pinning the table of contents on a phone would cover the article it links
+     to, so it becomes a plain block at the top — set in two columns, or the
+     reader scrolls a full screen of links before reaching a word of prose. */
+  .guide-sticky { position: static; max-height: none; }
+  .guide-toc { columns: 2; column-gap: 4px; }
+  .guide-toc a { padding: 7px 8px; break-inside: avoid; }
+
+  /* minmax(0, 1fr), never plain 1fr: a grid item defaults to min-width:auto,
+     so a single track sized 1fr still stretches to its widest child and takes
+     the whole panel off the side of the screen. */
+  .g2, .g3, .g4, .split, .split-head { grid-template-columns: minmax(0, 1fr); }
+
+  /* In a narrow tile the label and the value fight over one line; stacking
+     them keeps a three-part value like "1 · 24 · 25" on a single row. */
+  .gauge-top { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .gauge-value { font-size: 18px; }
+  .seg { flex-wrap: wrap; }
+  .note { font-size: 12px; }
 }

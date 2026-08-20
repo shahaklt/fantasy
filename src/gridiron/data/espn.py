@@ -15,6 +15,7 @@ values of ``espn_s2`` and ``SWID`` (keep the braces on SWID).
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
@@ -29,6 +30,7 @@ from .market import normalize_name
 log = logging.getLogger(__name__)
 
 CREDENTIALS_PATH = USER_DIR / "espn_credentials.json"
+ROSTER_PATH = USER_DIR / "espn_roster.json"
 
 #: ESPN slot names -> the position vocabulary the rest of the app uses.
 POSITION_FIX = {"D/ST": "DST", "DST": "DST", "K": "K", "QB": "QB",
@@ -93,6 +95,35 @@ class EspnCredentials:
         except OSError:
             pass
         return CREDENTIALS_PATH
+
+
+def save_roster(player_ids: list[str], team: dict | None) -> None:
+    """Remember the synced roster across restarts.
+
+    Which players are yours is a fact about your league, not about this process,
+    so holding it only in memory means every restart quietly reverts My League
+    and start/sit to an empty roster with no indication why.
+    """
+    try:
+        ROSTER_PATH.write_text(json.dumps({
+            "player_ids": list(player_ids), "team": team,
+            "synced_at": dt.datetime.now().isoformat(timespec="seconds")}, indent=2))
+        ROSTER_PATH.chmod(0o600)
+    except OSError as exc:
+        log.warning("could not save the ESPN roster: %s", exc)
+
+
+def load_roster() -> dict:
+    """The last synced roster, or empty defaults."""
+    if not ROSTER_PATH.exists():
+        return {"player_ids": [], "team": None, "synced_at": None}
+    try:
+        data = json.loads(ROSTER_PATH.read_text())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not read the saved ESPN roster: %s", exc)
+        return {"player_ids": [], "team": None, "synced_at": None}
+    return {"player_ids": [str(p) for p in data.get("player_ids", [])],
+            "team": data.get("team"), "synced_at": data.get("synced_at")}
 
 
 def _swid(value: str) -> str:

@@ -1,0 +1,25 @@
+{
+  "name": "Gridiron — fantasy football engine",
+  "short_name": "Gridiron",
+  "description": "Monte Carlo projections, draft board and market tape, served from your own machine.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#05080c",
+  "theme_color": "#05080c",
+  "categories": ["sports", "utilities"],
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Draft Room", "url": "/#draft" },
+    { "name": "Projections", "url": "/#projections" },
+    { "name": "My League", "url": "/#league" },
+    { "name": "Live Tape", "url": "/#live" }
+  ]
+}

@@ -142,3 +142,47 @@ def test_portfolio_starts_in_paper_mode(client):
     assert body["mode"] == "paper"
     assert body["paper"]["cash"] > 0
     assert body["risk"]["limits"]["max_order_notional"] > 0
+
+
+# --------------------------------------------------------------------------------------
+# Installable app
+# --------------------------------------------------------------------------------------
+def test_the_manifest_describes_an_installable_app(client):
+    body = client.get("/manifest.webmanifest").json()
+    assert body["display"] == "standalone"
+    assert body["start_url"] == "/"
+    assert any(i.get("purpose") == "maskable" for i in body["icons"]), \
+        "Android crops the icon to its own shape and needs a maskable variant"
+
+
+def test_every_icon_the_manifest_names_actually_exists(client):
+    """A broken icon reference is invisible until install time, when it is too late."""
+    for icon in client.get("/manifest.webmanifest").json()["icons"]:
+        r = client.get(icon["src"])
+        assert r.status_code == 200, icon["src"]
+        assert r.headers["content-type"] == "image/png"
+
+
+def test_the_service_worker_is_served_from_the_root(client):
+    """A worker under /assets could only ever control /assets, not the app shell."""
+    r = client.get("/sw.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert r.headers.get("Service-Worker-Allowed") == "/"
+
+
+def test_the_worker_never_caches_live_data(client):
+    """Stale projections presented as current are worse than an error."""
+    source = client.get("/sw.js").text
+    assert "/api/" in source and "isLive" in source
+
+
+def test_ios_finds_a_home_screen_icon(client):
+    assert client.get("/apple-touch-icon.png").status_code == 200
+
+
+def test_the_page_is_phone_ready(client):
+    head = client.get("/").text
+    assert "viewport-fit=cover" in head, "needed to paint under the notch"
+    assert 'rel="manifest"' in head
+    assert 'name="theme-color"' in head

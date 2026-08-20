@@ -9,21 +9,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
 import numpy as np
 import polars as pl
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import pipeline
+from .. import net, pipeline
 from ..analysis import GameAnalyst
 from ..analysis.compare import (accuracy_scorecard, agreement_stats, disagreements,
                                 roster_report, season_comparison, weekly_comparison)
-from ..data.espn import EspnCredentials, EspnLeague, espn_available
+from ..data.espn import (EspnCredentials, EspnLeague, espn_available,
+                         load_roster, save_roster)
 from ..config import REPO_ROOT, current_season, detect_backend
 from ..draft import DraftSimulator, DraftState, positional_scarcity
 from ..exchange.base import Action, OrderType, PaperBroker, Side, TradingMode
@@ -38,8 +40,10 @@ from ..quant.microstructure import price_momentum, realised_volatility
 from ..scheduler import build_default_scheduler
 from ..scoring import LeagueSettings
 from ..sim.league import FantasyTeam, LeagueSimulator, start_sit
+from . import access, lan
 from .schemas import (CredentialsRequest, DraftPick, DraftReset, EspnCompareRequest,
                       EspnCredentialsRequest, EspnScoreRequest, EspnSyncRequest,
+                      EspnTeamRequest,
                       LeagueSimRequest,
                       LeagueUpdate, LineupRequest, PollRequest, RebuildRequest,
                       RecommendRequest, SignalRequest, TradeRequest)
@@ -51,6 +55,7 @@ WEB_DIR = REPO_ROOT / "web"
 app = FastAPI(title="Gridiron", version="1.0.0",
               description="Monte Carlo fantasy football and prediction-market engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(access.AccessGuard)
 
 
 # --------------------------------------------------------------------------------------
@@ -73,8 +78,18 @@ class AppState:
         self.model_probs: dict[str, float] = {}
         self.watchlist: list = []
         self._espn: EspnLeague | None = None
-        self.espn_roster: list[str] = []      # player_ids, imported from ESPN
-        self.espn_sync: dict = {}
+        # The synced roster is read back from disk, so a restart does not
+        # silently empty My League and start/sit.
+        saved = load_roster()
+        self.espn_roster: list[str] = saved["player_ids"]   # player_ids, from ESPN
+        self.espn_sync: dict = ({"imported": {"roster": {"team": saved["team"]}}}
+                                if saved["player_ids"] else {})
+
+    def remember_roster(self, player_ids: list[str], team: dict | None) -> None:
+        self.espn_roster = player_ids
+        self.espn_sync.setdefault("imported", {})["roster"] = {
+            **self.espn_sync.get("imported", {}).get("roster", {}), "team": team}
+        save_roster(player_ids, team)
 
     def espn(self, refresh: bool = False) -> EspnLeague:
         if self._espn is None or refresh:
@@ -160,6 +175,114 @@ def status():
                    for name, c in state.venues.items()],
         "polling": state.router.polling,
     })
+
+
+# --------------------------------------------------------------------------------------
+# Phone access
+# --------------------------------------------------------------------------------------
+def _local_only(request: Request):
+    """Pairing material is readable from this machine and nowhere else.
+
+    Handing the token back over the network would defeat the point of having
+    one, so a paired phone can see *that* the gate is on but never its key.
+    """
+    if not access.is_loopback_client(request.scope):
+        raise HTTPException(status_code=403,
+                            detail="pairing details are only readable on the machine "
+                                   "running the server")
+
+
+def _on_the_network() -> bool:
+    """Whether anything other than this machine can currently reach the panel."""
+    return lan.listener.active or net.is_wildcard_host(access.settings.host)
+
+
+@app.get("/api/access")
+def access_info(request: Request):
+    """What a phone needs to reach this panel, for the Settings screen."""
+    local = access.is_loopback_client(request.scope)
+    guarded = access.settings.required
+    token = access.access_token(create=guarded) if local else None
+    port = access.settings.pairing_port
+    # A wildcard bind advertises a routable address; the on-demand listener is
+    # always on every interface, whatever the main server bound to.
+    advertise = "0.0.0.0" if lan.listener.active else access.settings.host
+    pair = net.pairing(advertise, port, token, guarded)
+    return _clean({
+        "required": guarded,
+        "local": local,
+        "host": access.settings.host,
+        "port": port,
+        "on_network": _on_the_network(),
+        # Only a loopback-bound server can be toggled: an interface the process
+        # bound at startup cannot be given back without restarting it.
+        "can_toggle": not net.is_wildcard_host(access.settings.host),
+        "listener_port": lan.listener.port,
+        # Always the real network interfaces, not the bind address: on a
+        # loopback bind the useful answer is still "here is where you would be
+        # reachable if you restarted with --lan".
+        "lan_addresses": net.lan_addresses(),
+        "url": pair.url if local else None,
+        "alternates": pair.alternates() if local else [],
+        "token": token,
+        "qr": net.qr_svg(pair.url) if local else None,
+        "qr_available": net.qr_svg("probe") is not None,
+        "tunnel_available": net.tunnel_command() is not None,
+        "pinned_by_env": bool(os.environ.get("GRIDIRON_TOKEN")),
+    })
+
+
+@app.post("/api/access/rotate")
+def access_rotate(request: Request):
+    """New token, every paired device logged out."""
+    _local_only(request)
+    try:
+        token = access.rotate_token()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pair = net.pairing("0.0.0.0" if lan.listener.active else access.settings.host,
+                       access.settings.pairing_port, token, access.settings.required)
+    return _clean({"token": token, "url": pair.url, "qr": net.qr_svg(pair.url),
+                   "alternates": pair.alternates()})
+
+
+@app.post("/api/access/enable")
+def access_enable(request: Request):
+    """Put the panel on the wifi, now, without losing the warm caches.
+
+    The gate goes up *before* the socket opens, so there is never a moment
+    where the network can reach an unguarded panel.
+    """
+    _local_only(request)
+    if net.is_wildcard_host(access.settings.host):
+        return _clean({"already": True, "detail": "the server was started with --lan; "
+                                                  "it is already on the network"})
+
+    access.settings.required = True
+    token = access.access_token()
+    try:
+        port = lan.listener.start(app, access.settings.port)
+    except Exception as exc:  # noqa: BLE001
+        access.settings.required = False
+        raise HTTPException(500, f"could not open a network listener: {exc}") from exc
+
+    access.settings.lan_port = port
+    pair = net.pairing("0.0.0.0", port, token, True)
+    return _clean({"enabled": True, "port": port, "url": pair.url, "token": token,
+                   "qr": net.qr_svg(pair.url), "alternates": pair.alternates()})
+
+
+@app.post("/api/access/disable")
+def access_disable(request: Request):
+    """Take it back off the network. Paired devices stop resolving immediately."""
+    _local_only(request)
+    if net.is_wildcard_host(access.settings.host):
+        raise HTTPException(400, "the server was started with --lan; restart it without "
+                                 "that flag to take the panel off the network")
+    lan.listener.stop()
+    access.settings.lan_port = None
+    access.settings.required = False
+    return _clean({"enabled": False})
 
 
 @app.get("/api/league")
@@ -428,6 +551,18 @@ def my_roster():
                             .get("roster", {}) or {}).get("team")})
 
 
+@app.delete("/api/espn/team")
+def espn_forget_team():
+    """Forget the saved team and roster, without touching the cookies."""
+    creds = EspnCredentials.load()
+    if creds is not None:
+        creds.team_id = None
+        creds.save()
+    state.remember_roster([], None)
+    state.espn_sync = {}
+    return _clean({"forgotten": True})
+
+
 @app.post("/api/lineup")
 def lineup(req: LineupRequest):
     a = arts(need_sims=True)
@@ -605,6 +740,11 @@ def espn_status():
         "configured": creds is not None,
         "league_id": creds.league_id if creds else None,
         "private": creds.is_private if creds else False,
+        # Without these the team picker has nothing to pre-select, and asks you
+        # to choose your own team again on every visit.
+        "team_id": creds.team_id if creds else None,
+        "team_name": None,
+        "roster_synced": len(state.espn_roster),
         "connected": False,
         "detail": "",
     }
@@ -614,6 +754,10 @@ def espn_status():
         return _clean(body)
     try:
         body.update(state.espn().connect())
+        body["team_id"] = creds.team_id
+        if creds.team_id is not None:
+            mine = state.espn().my_team()
+            body["team_name"] = (mine or {}).get("team_name")
     except Exception as exc:  # noqa: BLE001
         body["detail"] = str(exc)
     return _clean(body)
@@ -622,8 +766,14 @@ def espn_status():
 @app.post("/api/espn/credentials")
 def espn_credentials(req: EspnCredentialsRequest):
     """Save league id and cookies locally (file mode 0600), then verify."""
+    # Re-saving cookies must not forget which team is yours: without carrying
+    # the existing team_id forward, refreshing an expired espn_s2 quietly reset
+    # the whole ESPN view to "which team is yours?".
+    existing = EspnCredentials.load()
+    keep_team = req.team_id if req.team_id is not None else (
+        existing.team_id if existing and existing.league_id == req.league_id else None)
     creds = EspnCredentials(league_id=req.league_id, espn_s2=req.espn_s2.strip(),
-                            swid=req.swid.strip(), year=req.year)
+                            swid=req.swid.strip(), year=req.year, team_id=keep_team)
     path = creds.save()
     state._espn = None
     try:
@@ -631,6 +781,38 @@ def espn_credentials(req: EspnCredentialsRequest):
         return _clean({"ok": True, "saved_to": str(path), **info})
     except Exception as exc:  # noqa: BLE001
         return _clean({"ok": False, "saved_to": str(path), "detail": str(exc)})
+
+
+@app.post("/api/espn/team")
+def espn_set_team(req: EspnTeamRequest):
+    """Remember which team in the league is yours.
+
+    Saved on its own rather than only as a side effect of a full sync, so
+    choosing your team once is enough — every later call falls back to this.
+    """
+    creds = EspnCredentials.load()
+    if creds is None:
+        raise HTTPException(400, "no ESPN league is configured yet")
+    creds.team_id = int(req.team_id)
+    creds.save()
+
+    lg = state.espn(refresh=True)
+    team = None
+    try:
+        team = lg.my_team()
+    except Exception as exc:  # noqa: BLE001
+        log.info("could not resolve the team name: %s", exc)
+
+    # Refresh the saved roster too, so My League reflects the new choice at once.
+    matched, unmatched = [], []
+    try:
+        matched, unmatched = _match_to_board(lg.my_roster(team_id=creds.team_id))
+    except Exception as exc:  # noqa: BLE001
+        log.info("could not refresh the roster for the new team: %s", exc)
+    state.remember_roster(matched, team)
+
+    return _clean({"saved": True, "team_id": creds.team_id, "team": team,
+                   "matched": len(matched), "unmatched": unmatched})
 
 
 @app.get("/api/espn/league")
@@ -802,7 +984,7 @@ def espn_sync(req: EspnSyncRequest):
         try:
             mine = lg.my_roster(team_id=req.team_id)
             matched, unmatched = _match_to_board(mine)
-            state.espn_roster = matched
+            state.remember_roster(matched, lg.my_team() or None)
             result["imported"]["roster"] = {
                 "espn_players": mine.height, "matched": len(matched),
                 "unmatched": unmatched,
@@ -981,6 +1163,26 @@ if WEB_DIR.exists():
     def index():
         return FileResponse(str(WEB_DIR / "index.html"))
 
+    # Both of these have to answer from the root: a service worker may only
+    # control the paths below its own URL, and a worker served from /assets
+    # could not intercept the app shell at /.
+    @app.get("/sw.js")
+    def service_worker():
+        return FileResponse(str(WEB_DIR / "sw.js"), media_type="text/javascript",
+                            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        return FileResponse(str(WEB_DIR / "manifest.webmanifest"),
+                            media_type="application/manifest+json")
+
+    @app.get("/apple-touch-icon.png")
+    @app.get("/apple-touch-icon-precomposed.png")
+    def apple_icon():
+        """iOS asks for this at the root before it reads any <link> tag."""
+        return FileResponse(str(WEB_DIR / "assets" / "apple-touch-icon.png"),
+                            media_type="image/png")
+
 
 @app.exception_handler(Exception)
 async def unhandled(request, exc):  # noqa: ANN001
@@ -999,8 +1201,14 @@ def _on_startup():
 
 
 def run(host: str = "127.0.0.1", port: int = 8000, reload: bool = False,
-        start_scheduler: bool = True):
+        start_scheduler: bool = True, require_token: bool | None = None):
     import uvicorn
+
+    # Anything other than a loopback bind puts the panel — and the endpoints
+    # that can place orders — on the network, so the gate goes up by default.
+    if require_token is None:
+        require_token = not net.is_loopback_host(host)
+    access.configure(required=require_token, host=host, port=port)
 
     if start_scheduler:
         state.scheduler.start()

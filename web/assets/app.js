@@ -6,17 +6,22 @@ import { guide } from './guide.js';
 import { espn } from './espn.js';
 
 const VIEWS = {
-  dashboard:   { title: 'Dashboard',   render: dashboard,   key: '1' },
-  projections: { title: 'Projections', render: projections, key: '2' },
-  draft:       { title: 'Draft Room',  render: draft,       key: '3' },
-  games:       { title: 'Games',       render: games,       key: '4' },
-  league:      { title: 'My League',   render: myLeague,    key: '5' },
-  espn:        { title: 'ESPN League', render: espn,        key: '0' },
-  markets:     { title: 'Markets',     render: markets,     key: '6' },
-  live:        { title: 'Live Tape',   render: live,        key: '7' },
-  guide:       { title: 'Stats Guide', render: guide,       key: '8' },
-  settings:    { title: 'Settings',    render: settings,    key: '9' },
+  dashboard:   { title: 'Dashboard',   render: dashboard,   key: '1', icon: '\u25E7', short: 'Home' },
+  projections: { title: 'Projections', render: projections, key: '2', icon: '\u25A4', short: 'Proj' },
+  draft:       { title: 'Draft Room',  render: draft,       key: '3', icon: '\u25C6', short: 'Draft' },
+  games:       { title: 'Games',       render: games,       key: '4', icon: '\u25C8', short: 'Games' },
+  league:      { title: 'My League',   render: myLeague,    key: '5', icon: '\u25A9', short: 'League' },
+  espn:        { title: 'ESPN League', render: espn,        key: '0', icon: '\u2B21', short: 'ESPN' },
+  markets:     { title: 'Markets',     render: markets,     key: '6', icon: '\u21C4', short: 'Markets' },
+  live:        { title: 'Live Tape',   render: live,        key: '7', icon: '\u25C9', short: 'Tape' },
+  guide:       { title: 'Stats Guide', render: guide,       key: '8', icon: '?', short: 'Guide' },
+  settings:    { title: 'Settings',    render: settings,    key: '9', icon: '\u2699', short: 'Setup' },
 };
+
+// The five that earn a permanent thumb position on a phone; the rest live one
+// tap deeper, in the overflow sheet.
+const TABS = ['dashboard', 'projections', 'draft', 'games'];
+const OVERFLOW = Object.keys(VIEWS).filter((k) => !TABS.includes(k));
 
 let current = 'dashboard';
 
@@ -24,6 +29,10 @@ async function show(name) {
   const view = VIEWS[name] || VIEWS.dashboard;
   current = VIEWS[name] ? name : 'dashboard';
   $$('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === current));
+  $$('#tabbar button').forEach((b) => b.classList.toggle('active',
+    b.dataset.view === current || (b.dataset.view === '__more' && OVERFLOW.includes(current))));
+  $$('#sheet-list button').forEach((b) => b.classList.toggle('active', b.dataset.view === current));
+  sheet.hide();
   $('#crumb').textContent = view.title;
   location.hash = current;
   const root = $('#view');
@@ -152,6 +161,39 @@ const palette = {
   },
 };
 
+// ------------------------------------------------------------- phone chrome
+const sheet = {
+  show() { $('#sheet').classList.add('open'); },
+  hide() { $('#sheet').classList.remove('open'); },
+  toggle() { $('#sheet').classList.toggle('open'); },
+};
+
+function buildPhoneChrome() {
+  const tab = (view, key, label, icon) => el('button', {
+    'data-view': key, type: 'button',
+    onclick: () => (key === '__more' ? sheet.toggle() : show(key)),
+  }, el('i', {}, icon), el('span', {}, label));
+
+  $('#tabbar').replaceChildren(
+    ...TABS.map((k) => tab(VIEWS[k], k, VIEWS[k].short, VIEWS[k].icon)),
+    tab(null, '__more', 'More', '\u2261'));
+
+  $('#sheet-list').replaceChildren(...OVERFLOW.map((k) => el('button', {
+    'data-view': k, type: 'button', onclick: () => show(k),
+  }, el('i', {}, VIEWS[k].icon), el('span', {}, VIEWS[k].title))));
+
+  $('#sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet') sheet.hide(); });
+}
+
+// Offline shell and a real home-screen app. Browsers only allow this on a
+// secure origin, which over plain wifi means it silently does nothing — that
+// is fine, the panel is a normal website there. Through a tunnel or Tailscale
+// (both real HTTPS) it installs properly.
+function registerWorker() {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+  navigator.serviceWorker.register('/sw.js').catch(() => { /* not fatal */ });
+}
+
 // --------------------------------------------------------------------- wiring
 function wire() {
   $$('#nav button').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
@@ -215,7 +257,9 @@ function wire() {
   });
 }
 
+buildPhoneChrome();
 wire();
+registerWorker();
 refreshStatus();
 setInterval(refreshStatus, 4000);
 show((location.hash || '#dashboard').slice(1));
