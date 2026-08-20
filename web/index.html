@@ -2,7 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#05080c" />
+<meta name="description" content="Monte Carlo projections, draft board and market tape, served from your own machine." />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Gridiron" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>Gridiron</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%2305080c'/><text x='16' y='23' font-size='18' font-family='monospace' fill='%233ddbd9' text-anchor='middle'>G</text></svg>" />
 <link rel="stylesheet" href="/assets/styles.css" />
@@ -40,14 +49,27 @@
       <div id="crumb">Dashboard</div>
       <div class="topbar-actions">
         <span id="toast" class="toast"></span>
-        <button id="btn-palette" class="btn ghost">⌘K</button>
-        <button id="btn-refresh" class="btn ghost">Refresh data</button>
-        <button id="btn-rebuild" class="btn primary">Rebuild sims</button>
+        <button id="btn-palette" class="btn ghost" title="Search (⌘K)">
+          <i class="btn-icon">⌕</i><span class="btn-label">⌘K</span></button>
+        <button id="btn-refresh" class="btn ghost" title="Refresh data">
+          <i class="btn-icon">↻</i><span class="btn-label">Refresh data</span></button>
+        <button id="btn-rebuild" class="btn primary" title="Rebuild simulations">
+          <i class="btn-icon">▶</i><span class="btn-label">Rebuild sims</span></button>
       </div>
     </header>
     <div class="readout" id="readout"></div>
     <section id="view"></section>
   </main>
+</div>
+
+<!-- Phone chrome. Hidden on a desktop viewport; built from the same view table
+     as the sidebar so the two can never drift apart. -->
+<nav id="tabbar" class="tabbar"></nav>
+<div id="sheet" class="sheet">
+  <div class="sheet-box">
+    <div class="sheet-grip"></div>
+    <div id="sheet-list" class="sheet-list"></div>
+  </div>
 </div>
 
 <div id="drawer" class="drawer">

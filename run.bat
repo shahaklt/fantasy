@@ -24,5 +24,6 @@ if errorlevel 1 (
   )
 )
 
-python -m gridiron.cli serve --host 127.0.0.1 --port 8000
+REM Pass --lan to serve the panel to phones on your wifi, e.g.  run.bat --lan
+python -m gridiron.cli serve --host 127.0.0.1 --port 8000 %*
 pause

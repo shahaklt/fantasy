@@ -5,7 +5,9 @@ import { openDrawer, store } from './views1.js';
 
 // ---------------------------------------------------------------- DRAFT ROOM
 export async function draft(root) {
-  const wrap = el('div', { class: 'grid', style: 'grid-template-columns:minmax(0,2.1fr) minmax(300px,1fr);gap:14px' });
+  // Named rather than inline so the phone breakpoint can collapse it; an
+  // inline grid-template outranks any media query.
+  const wrap = el('div', { class: 'grid split' });
   root.replaceChildren(wrap);
   const leftCol = el('div', {});
   const rightCol = el('div', { class: 'grid', style: 'gap:14px;align-content:start' });
@@ -56,9 +58,9 @@ export async function draft(root) {
     ].filter(Boolean);
 
     const onClock = board.on_the_clock === board.my_slot;
-    const header = el('div', { class: 'grid', style: 'grid-template-columns:minmax(0,1fr) auto;gap:12px;margin-bottom:12px' },
+    const header = el('div', { class: 'grid split-head' },
       panel('Draft state',
-        el('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px' },
+        el('div', { class: 'grid tiles' },
           gauge('overall pick', `#${board.pick}`,
             `round ${Math.ceil(board.pick / (store.league?.teams || 12))}`),
           gauge('on the clock', `T${board.on_the_clock}`,

@@ -9,17 +9,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
 import numpy as np
 import polars as pl
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import pipeline
+from .. import net, pipeline
 from ..analysis import GameAnalyst
 from ..analysis.compare import (accuracy_scorecard, agreement_stats, disagreements,
                                 roster_report, season_comparison, weekly_comparison)
@@ -38,6 +39,7 @@ from ..quant.microstructure import price_momentum, realised_volatility
 from ..scheduler import build_default_scheduler
 from ..scoring import LeagueSettings
 from ..sim.league import FantasyTeam, LeagueSimulator, start_sit
+from . import access
 from .schemas import (CredentialsRequest, DraftPick, DraftReset, EspnCompareRequest,
                       EspnCredentialsRequest, EspnScoreRequest, EspnSyncRequest,
                       LeagueSimRequest,
@@ -51,6 +53,7 @@ WEB_DIR = REPO_ROOT / "web"
 app = FastAPI(title="Gridiron", version="1.0.0",
               description="Monte Carlo fantasy football and prediction-market engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(access.AccessGuard)
 
 
 # --------------------------------------------------------------------------------------
@@ -160,6 +163,62 @@ def status():
                    for name, c in state.venues.items()],
         "polling": state.router.polling,
     })
+
+
+# --------------------------------------------------------------------------------------
+# Phone access
+# --------------------------------------------------------------------------------------
+def _local_only(request: Request):
+    """Pairing material is readable from this machine and nowhere else.
+
+    Handing the token back over the network would defeat the point of having
+    one, so a paired phone can see *that* the gate is on but never its key.
+    """
+    if not access.is_loopback_client(request.scope):
+        raise HTTPException(status_code=403,
+                            detail="pairing details are only readable on the machine "
+                                   "running the server")
+
+
+@app.get("/api/access")
+def access_info(request: Request):
+    """What a phone needs to reach this panel, for the Settings screen."""
+    local = access.is_loopback_client(request.scope)
+    guarded = access.settings.required
+    token = access.access_token(create=guarded) if local else None
+    port = access.settings.port
+    pair = net.pairing(access.settings.host, port, token, guarded)
+    return _clean({
+        "required": guarded,
+        "local": local,
+        "host": access.settings.host,
+        "port": port,
+        # Always the real network interfaces, not the bind address: on a
+        # loopback bind the useful answer is still "here is where you would be
+        # reachable if you restarted with --lan".
+        "lan_addresses": net.lan_addresses(),
+        "url": pair.url if local else None,
+        "alternates": pair.alternates() if local else [],
+        "token": token,
+        "qr": net.qr_svg(pair.url) if local else None,
+        "qr_available": net.qr_svg("probe") is not None,
+        "tunnel_available": net.tunnel_command() is not None,
+        "pinned_by_env": bool(os.environ.get("GRIDIRON_TOKEN")),
+    })
+
+
+@app.post("/api/access/rotate")
+def access_rotate(request: Request):
+    """New token, every paired device logged out."""
+    _local_only(request)
+    try:
+        token = access.rotate_token()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pair = net.pairing(access.settings.host, access.settings.port, token,
+                       access.settings.required)
+    return _clean({"token": token, "url": pair.url, "qr": net.qr_svg(pair.url),
+                   "alternates": pair.alternates()})
 
 
 @app.get("/api/league")
@@ -981,6 +1040,26 @@ if WEB_DIR.exists():
     def index():
         return FileResponse(str(WEB_DIR / "index.html"))
 
+    # Both of these have to answer from the root: a service worker may only
+    # control the paths below its own URL, and a worker served from /assets
+    # could not intercept the app shell at /.
+    @app.get("/sw.js")
+    def service_worker():
+        return FileResponse(str(WEB_DIR / "sw.js"), media_type="text/javascript",
+                            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        return FileResponse(str(WEB_DIR / "manifest.webmanifest"),
+                            media_type="application/manifest+json")
+
+    @app.get("/apple-touch-icon.png")
+    @app.get("/apple-touch-icon-precomposed.png")
+    def apple_icon():
+        """iOS asks for this at the root before it reads any <link> tag."""
+        return FileResponse(str(WEB_DIR / "assets" / "apple-touch-icon.png"),
+                            media_type="image/png")
+
 
 @app.exception_handler(Exception)
 async def unhandled(request, exc):  # noqa: ANN001
@@ -999,8 +1078,14 @@ def _on_startup():
 
 
 def run(host: str = "127.0.0.1", port: int = 8000, reload: bool = False,
-        start_scheduler: bool = True):
+        start_scheduler: bool = True, require_token: bool | None = None):
     import uvicorn
+
+    # Anything other than a loopback bind puts the panel — and the endpoints
+    # that can place orders — on the network, so the gate goes up by default.
+    if require_token is None:
+        require_token = not net.is_loopback_host(host)
+    access.configure(required=require_token, host=host, port=port)
 
     if start_scheduler:
         state.scheduler.start()

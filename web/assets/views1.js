@@ -206,6 +206,98 @@ export async function playerDrawer(playerId) {
 }
 
 // ------------------------------------------------------------------ SETTINGS
+/** Everything needed to open this panel on a phone, without typing a token. */
+async function phoneAccessPanel() {
+  let acc;
+  try {
+    acc = await api.get('/api/access');
+  } catch (err) {
+    return panel('Phone access', el('div', { class: 'note bad' }, String(err)));
+  }
+
+  const body = el('div', {});
+
+  if (!acc.required) {
+    body.append(
+      el('div', { class: 'note' },
+        'The server is bound to this machine only, so nothing else on the network can '
+        + 'reach it. To use the panel on your phone, restart it with:'),
+      el('div', { class: 'roster-slot', style: 'margin-top:8px' },
+        el('code', {}, './run.sh --lan'), el('span', { class: 'dim' }, 'macOS / Linux')),
+      el('div', { class: 'roster-slot' },
+        el('code', {}, 'run.bat --lan'), el('span', { class: 'dim' }, 'Windows')),
+      el('div', { class: 'note', style: 'margin-top:10px' },
+        'That binds every interface and puts an access token in front of anything that '
+        + 'is not this machine. The terminal then prints a QR code to scan.'),
+      ...((acc.lan_addresses || []).length
+        ? [kv('would be reachable at', `${acc.lan_addresses[0]}:${acc.port}`)]
+        : []));
+    return panel('Phone access', body, { actions: [led('off')] });
+  }
+
+  if (!acc.local) {
+    // Reached from the phone itself: it is already paired, and handing the
+    // token back over the wire would defeat the point of having one.
+    body.append(el('div', { class: 'note' },
+      'This device is paired. The pairing link, token and QR code are only readable '
+      + 'from the machine running the server.'));
+    return panel('Phone access', body, { actions: [led('on')] });
+  }
+
+  const link = el('input', { value: acc.url, readonly: 'readonly',
+    onclick: (e) => e.target.select(), style: 'width:100%' });
+
+  body.append(
+    el('div', { class: 'note', style: 'margin-bottom:10px' },
+      'Scan this with your phone camera while it is on the same wifi. The link carries '
+      + 'the token, so the device is remembered after the first load.'),
+    acc.qr
+      ? el('div', { class: 'qr', html: acc.qr })
+      : el('div', { class: 'note bad' },
+          'No QR code — install segno (pip install segno) and restart to get one.'),
+    el('div', { style: 'margin-top:10px' }, link),
+    el('div', { style: 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap' },
+      el('button', {
+        class: 'btn sm',
+        onclick: async (e) => {
+          try {
+            await navigator.clipboard.writeText(acc.url);
+            toast('link copied');
+          } catch { link.select(); toast('select and copy the link', true); }
+          e.target.blur();
+        },
+      }, 'Copy link'),
+      el('button', {
+        class: 'btn sm danger',
+        onclick: async (e) => {
+          if (!confirm('Issue a new token? Every paired device will have to scan again.')) return;
+          e.target.disabled = true;
+          try {
+            await api.post('/api/access/rotate');
+            toast('new token issued');
+            settings(document.querySelector('#view'));
+          } catch (err) { toast(String(err), true); e.target.disabled = false; }
+        },
+      }, acc.pinned_by_env ? 'Token pinned by env' : 'Rotate token')),
+    kv('token', acc.token),
+    ...(acc.alternates || []).map((u) => kv('also reachable at', u)),
+    el('div', { class: 'note', style: 'margin-top:10px' },
+      acc.url.startsWith('https://')
+        ? 'That is an HTTPS origin, so the phone can install the panel as a real app '
+          + '(Add to Home Screen) and open it offline.'
+        : 'Over plain wifi the browser will not install this as an offline app — that '
+          + 'needs HTTPS. iOS Add to Home Screen still gives you a full-screen icon. '
+          + 'For a properly installable app, or for access away from home, start the '
+          + 'server with --tunnel, or put it behind Tailscale.'),
+    ...(acc.tunnel_available
+      ? [el('div', { class: 'note' }, 'cloudflared is installed: ./run.sh --tunnel exposes '
+          + 'the panel off your network, still behind this token.')]
+      : []));
+
+  return panel('Phone access', body, { actions: [led('on')] });
+}
+
+
 export async function settings(root) {
   const s = await api.get('/api/status');
   const league = s.league;
@@ -288,6 +380,7 @@ export async function settings(root) {
       actions: [led(s.build?.building ? 'busy' : 'on')] });
 
   form.append(dataPanel);
+  form.append(await phoneAccessPanel());
 
   form.append(
     panel('League',
@@ -387,7 +480,9 @@ export async function myLeague(root) {
 
   const render = async () => {
     const mine = rosterIds.map((id) => board.find((b) => b.player_id === id)).filter(Boolean);
-    const picker = el('select', { id: 'add-player' },
+    // flex:1 with min-width:0 — a select is sized by its longest option, and
+    // "Amon-Ra St. Brown (WR DET)" is wider than a phone.
+    const picker = el('select', { id: 'add-player', style: 'flex:1;min-width:0' },
       el('option', { value: '' }, 'Add a player…'),
       board.slice(0, 500).map((p) => el('option', { value: p.player_id },
         `${p.player_name} (${p.position} ${p.team})`)));
