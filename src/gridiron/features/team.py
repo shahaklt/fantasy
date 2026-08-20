@@ -268,7 +268,93 @@ def implied_team_totals(season: int, ctx: TeamContext | None = None) -> pl.DataF
             - 0.0022 * pl.col("team_spread").fill_null(0.0)
         ).clip(0.35, 0.78).alias("exp_pass_rate_game"),
     )
+    long = apply_environment(long)
     return long.sort(["week", "team"])
+
+
+def apply_environment(long: pl.DataFrame, fetch: bool = True) -> pl.DataFrame:
+    """Fold weather into the team-week expectations.
+
+    Two rules, both of which come out of the fit in
+    :mod:`gridiron.features.environment`:
+
+    * The **level** adjustment is only what the closing total does not already
+      contain. Wind qualifies (-1.83 pts per 10 mph against the line); cold does
+      not, and adding it would be counting the same thing twice.
+    * The **composition** adjustment applies regardless, because the total line
+      prices how many points, not how they are scored. This is where the
+      fantasy consequence lives: wind moves touches from the passing game to
+      the run, and that reaches individual players through the usage model.
+    """
+    from ..data.weather import for_game
+    from .environment import adjust
+
+    if long.is_empty():
+        return long
+
+    home = {}
+    for row in long.iter_rows(named=True):
+        gid = row.get("game_id")
+        if gid and row.get("is_home"):
+            home[gid] = row
+
+    cache: dict[str, object] = {}
+    for gid, row in home.items():
+        kickoff = _kickoff(row.get("gameday"))
+        weather = for_game(row.get("team"), kickoff, roof=row.get("roof"), fetch=fetch)
+        cache[gid] = (weather, adjust(weather))
+
+    def col(name, pick):
+        return pl.Series(name, [
+            pick(*cache[r["game_id"]]) if r.get("game_id") in cache else 0.0
+            for r in long.iter_rows(named=True)
+        ], dtype=pl.Float64)
+
+    long = long.with_columns([
+        col("env_total_points", lambda w, a: a.total_points),
+        col("env_rush_share", lambda w, a: a.rush_share),
+        col("env_comp_pct", lambda w, a: a.comp_pct),
+        col("env_ypa", lambda w, a: a.ypa),
+        col("env_kick_yards", lambda w, a: a.kick_yards),
+        col("env_wind_mph", lambda w, a: w.wind_mph),
+        col("env_temp_f", lambda w, a: w.temp_f),
+        col("env_elevation_ft", lambda w, a: w.elevation_ft),
+        pl.Series("env_indoor", [
+            bool(cache[r["game_id"]][0].indoor) if r.get("game_id") in cache else False
+            for r in long.iter_rows(named=True)], dtype=pl.Boolean),
+        pl.Series("env_reason", [
+            cache[r["game_id"]][1].reason if r.get("game_id") in cache else "unknown"
+            for r in long.iter_rows(named=True)], dtype=pl.Utf8),
+        pl.Series("env_source", [
+            cache[r["game_id"]][0].source if r.get("game_id") in cache else "unknown"
+            for r in long.iter_rows(named=True)], dtype=pl.Utf8),
+    ])
+
+    # Half the game-level effect lands on each side.
+    return long.with_columns([
+        (pl.col("implied_points") + pl.col("env_total_points") / 2.0)
+        .clip(6.0, 45.0).alias("implied_points"),
+        (pl.col("exp_pass_rate_neutral") - pl.col("env_rush_share"))
+        .clip(0.35, 0.78).alias("exp_pass_rate_neutral"),
+        (pl.col("exp_pass_rate_game") - pl.col("env_rush_share"))
+        .clip(0.35, 0.78).alias("exp_pass_rate_game"),
+    ])
+
+
+def _kickoff(gameday):
+    """Best-effort kickoff time; the hour only has to be close enough to forecast."""
+    import datetime as dt
+
+    if gameday is None:
+        return None
+    if isinstance(gameday, dt.datetime):
+        return gameday.replace(tzinfo=gameday.tzinfo or dt.timezone.utc)
+    if isinstance(gameday, dt.date):
+        return dt.datetime.combine(gameday, dt.time(18), tzinfo=dt.timezone.utc)
+    try:
+        return dt.datetime.fromisoformat(str(gameday)).replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
 
 
 #: Empirical game-script coefficients, estimated on 2018-2025 team-games with

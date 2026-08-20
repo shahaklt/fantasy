@@ -280,7 +280,12 @@ def build_market_board(scoring_preset: str = "half_ppr", teams: int = 12,
     if board.is_empty():
         return MarketBoard(pl.DataFrame(schema={"merge_name": pl.Utf8, "adp": pl.Float64}), sources)
 
-    board = board.filter(pl.col("adp").is_not_null()).sort("adp")
+    # merge_name breaks ADP ties. Without it, players on identical ADP order
+    # arbitrarily and take different market ranks on each build — and since the
+    # market blend is an isotonic fit over those ranks, a permutation of three
+    # tied players moved projections for most of the board. Rebuilding with no
+    # input change should not move a number.
+    board = board.filter(pl.col("adp").is_not_null()).sort(["adp", "merge_name"])
     board = board.with_columns(
         pl.col("adp_sd").fill_null(pl.col("adp") * 0.25 + 5.0).clip(1.0, 90.0),
         pl.int_range(1, pl.len() + 1).cast(pl.Float64).alias("market_rank"),

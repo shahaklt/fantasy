@@ -23,3 +23,8 @@ data/user/
 *.key
 kalshi_credentials.json
 polymarket_credentials.json
+
+# LaTeX build products
+paper/*.aux
+paper/*.log
+paper/*.out

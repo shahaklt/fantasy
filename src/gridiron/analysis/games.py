@@ -13,12 +13,14 @@ simulations back out at three levels:
 """
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass, field
 
 import numpy as np
 import polars as pl
 
-from ..config import DEFAULT_SIMS
+from ..config import DEFAULT_SIMS, current_season
 from ..quant.game_model import GameLine, price_game
 from ..sim.engine import MonteCarloEngine, SimInputs
 
@@ -109,12 +111,19 @@ class GamePrediction:
         return price_game(line)
 
 
+log = logging.getLogger(__name__)
+
+
 class GameAnalyst:
     """Runs the simulator for a week and reads out game-level predictions."""
 
-    def __init__(self, engine: MonteCarloEngine):
+    def __init__(self, engine: MonteCarloEngine, team_weeks=None, season: int | None = None):
         self.engine = engine
         self.inp: SimInputs = engine.inp
+        # Opponent and conditions per team-week; supplied by the pipeline, which
+        # is the only layer that has the projection set in hand.
+        self.team_weeks = team_weeks
+        self.season = season or current_season()
 
     def week_index(self, week: int) -> int:
         weeks = list(self.inp.weeks)
@@ -163,8 +172,61 @@ class GameAnalyst:
         }
         for name, arr in res.stats.items():
             data[name] = arr.mean(axis=0)
-        return pl.DataFrame(data).filter(pl.col("proj_points") > 0.05).sort(
-            "proj_points", descending=True)
+        frame = pl.DataFrame(data).filter(pl.col("proj_points") > 0.05)
+        frame = self._apply_matchup(frame, week)
+        return frame.sort("proj_points", descending=True)
+
+    def _apply_matchup(self, frame: pl.DataFrame, week: int) -> pl.DataFrame:
+        """Adjust for how this defence has handled this position, and say by how much.
+
+        Weekly only, deliberately. Over a full season a team faces seventeen
+        different defences and the effect averages out, so folding this into a
+        draft ranking would add noise dressed as information. In a single week
+        it is exactly the question being asked.
+
+        The multiplier is already shrunk by the fitted out-of-sample weight in
+        :mod:`gridiron.features.matchup`, so a defence allowing 30% more than
+        average moves a projection by about 5%, not 30%.
+        """
+        from ..features.matchup import positional_defense
+
+        tw = self.team_weeks
+        if tw is None or frame.is_empty():
+            return frame.with_columns(pl.lit(1.0).alias("matchup_factor"))
+
+        try:
+            opponents = (tw.filter(pl.col("week") == week)
+                           .select("team", "opponent", *[c for c in
+                                   ("env_reason", "env_wind_mph", "env_temp_f", "env_indoor")
+                                   if c in tw.columns]))
+        except Exception:  # noqa: BLE001
+            return frame.with_columns(pl.lit(1.0).alias("matchup_factor"))
+
+        try:
+            from ..data.nflverse import load_player_stats
+
+            factors = positional_defense(load_player_stats(), self.season, through_week=week)
+        except Exception as exc:  # noqa: BLE001
+            log.info("positional matchup unavailable: %s", exc)
+            factors = pl.DataFrame()
+
+        frame = frame.join(opponents, on="team", how="left")
+        if factors.is_empty():
+            return frame.with_columns(pl.lit(1.0).alias("matchup_factor"))
+
+        frame = frame.join(
+            factors.select(pl.col("defense").alias("opponent"), "position",
+                           pl.col("factor").alias("matchup_factor"),
+                           pl.col("rel_allowed").alias("matchup_allowed")),
+            on=["opponent", "position"], how="left")
+        return frame.with_columns(
+            pl.col("matchup_factor").fill_null(1.0)
+        ).with_columns([
+            (pl.col("proj_points") * pl.col("matchup_factor")).alias("proj_points"),
+            (pl.col("floor") * pl.col("matchup_factor")).alias("floor"),
+            (pl.col("median") * pl.col("matchup_factor")).alias("median"),
+            (pl.col("ceiling") * pl.col("matchup_factor")).alias("ceiling"),
+        ])
 
     def team_breakdown(self, players: pl.DataFrame, team: str) -> dict:
         """How a team's projected points decompose across its players."""

@@ -10,6 +10,8 @@ from functools import lru_cache
 
 import polars as pl
 
+import os
+
 from ..config import MIN_TRAIN_SEASON, current_season
 from .cache import DEFAULT_TTL, LONG_TTL, cached_frame
 
@@ -55,12 +57,64 @@ def _ttl_for(seasons: list[int]) -> float:
     return LONG_TTL if max(seasons) < current_season() else DEFAULT_TTL
 
 
-def _norm_seasons(seasons: int | list[int] | None, default_start: int = MIN_TRAIN_SEASON) -> list[int]:
+def training_cutoff() -> int | None:
+    """Latest season the model may learn from, or None for no cap.
+
+    Set by ``GRIDIRON_MAX_SEASON`` and used only for honest backtesting: with
+    it set to 2024, every "give me the history" call stops at 2024, so a 2025
+    holdout cannot leak into the profiles the model is fitted on.
+
+    It deliberately does *not* apply to an explicit season request. Predicting
+    the 2025 season still requires the 2025 schedule and its closing lines,
+    which are pre-game information and are the market anchor the model is built
+    around. Capping those would not be a stricter test, it would be a different
+    model.
+    """
+    raw = os.environ.get("GRIDIRON_MAX_SEASON", "").strip()
+    return int(raw) if raw.isdigit() else None
+
+
+def _norm_seasons(seasons: int | list[int] | None, default_start: int = MIN_TRAIN_SEASON,
+                  cap: bool = True) -> list[int]:
+    """Seasons to load, honouring the backtest cutoff.
+
+    The cap applies to explicit requests too, not only to "give me everything".
+    A backtest that quietly let ``team_game_features([2022..2025])`` through
+    would be scoring a model that had already seen the answers — and it did,
+    which is how this parameter came to exist.
+    """
+    cutoff = training_cutoff() if cap else None
     if seasons is None:
-        return list(range(default_start, current_season() + 1))
-    if isinstance(seasons, int):
-        return [seasons]
-    return sorted({int(s) for s in seasons})
+        end = current_season()
+        if cutoff is not None:
+            end = min(end, cutoff)
+        out = list(range(default_start, end + 1))
+    elif isinstance(seasons, int):
+        out = [seasons]
+    else:
+        out = sorted({int(s) for s in seasons})
+    if cutoff is not None:
+        out = [s for s in out if s <= cutoff] or [cutoff]
+    return out
+
+
+def _redact_future_results(frame: "pl.DataFrame") -> "pl.DataFrame":
+    """Blank out results past the cutoff, keeping the fixtures and the lines.
+
+    This is the exact line a backtest has to draw. Predicting the holdout
+    season needs its schedule and its closing spread and total — both known
+    before kickoff, and the market anchor the model is built around. What it
+    must not see is who won. Redacting the score columns lets one call site
+    serve both needs without a second code path.
+    """
+    cutoff = training_cutoff()
+    if cutoff is None or frame.is_empty() or "season" not in frame.columns:
+        return frame
+    future = pl.col("season") > cutoff
+    blanks = [pl.when(future).then(None).otherwise(pl.col(c)).alias(c)
+              for c in ("home_score", "away_score", "result", "total", "overtime")
+              if c in frame.columns]
+    return frame.with_columns(blanks) if blanks else frame
 
 
 # --------------------------------------------------------------------------------------
@@ -72,13 +126,15 @@ def load_schedules(seasons: int | list[int] | None = None, force: bool = False) 
     The upcoming season's full slate (with market lines) is published well before
     kickoff, which is what drives the team-total component of the simulator.
     """
-    seasons = _norm_seasons(seasons, 1999)
+    # Fixtures and lines are pre-game information, so the cutoff must not hide
+    # them; the *results* past the cutoff are redacted instead.
+    seasons = _norm_seasons(seasons, 1999, cap=False)
     key = f"schedules_{seasons[0]}_{seasons[-1]}"
 
     def _load():
         return _nflreadpy().load_schedules(seasons)
 
-    return cached_frame(key, _load, ttl=DEFAULT_TTL, force=force)
+    return _redact_future_results(cached_frame(key, _load, ttl=DEFAULT_TTL, force=force))
 
 
 def load_player_stats(seasons: int | list[int] | None = None, force: bool = False) -> pl.DataFrame:

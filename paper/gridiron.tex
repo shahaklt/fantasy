@@ -1,0 +1,518 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{caption}
+\usepackage{microtype}
+
+\hypersetup{colorlinks=true, linkcolor=black, citecolor=black, urlcolor=blue}
+
+\title{\textbf{Gridiron: A Market-Anchored Correlated Monte Carlo Model\\
+for Fantasy Football Projection}\\[0.4em]
+\large Design, empirical calibration, and a held-out season}
+
+\author{S. Lifshitz}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+We describe a simulation model for American football that produces joint
+distributions over player fantasy scoring, rather than point estimates. Three
+design choices distinguish it. First, scoring is sampled \emph{per game} --- one
+margin and one total per fixture --- so that teammates and opponents share the
+game state that generates their statistics, and correlations arise from the
+structure rather than being imposed afterwards. Second, team totals are anchored
+to closing betting-market lines, and every candidate adjustment is tested for
+whether the market has already priced it; adjustments that it has are discarded
+as double counting. Third, all effect sizes are estimated from data rather than
+asserted, and effects that fail to separate from noise are reported as zero and
+retained in the codebase as negative results.
+
+We estimate environmental effects on 3{,}341 outdoor team-games and 12{,}787
+field-goal attempts, and matchup effects out of sample on 56{,}554 player-weeks.
+We find that wind is \emph{not} priced into closing totals ($-1.83$ points per
+$10$ mph, significant) while temperature is; that altitude has no measurable
+effect on field-goal accuracy once attempt distance is controlled
+($-0.01$ yards per $1{,}000$ ft, $\mathrm{se}=0.028$); and that team-versus-team
+history carries no information beyond the closing spread ($r=0.026$), whereas a
+defence's history against a \emph{position} does ($\beta$ between $0.16$ and
+$0.27$, all significant).
+
+On a strictly held-out 2025 season --- 272 games and 5{,}237 player-weeks, with
+all results and statistics from that season hidden from every estimator --- the
+model matches the closing line on game outcomes (margin MAE $9.72$ against the
+market's $9.72$) without beating it (50.7\% against the spread), and is well
+calibrated on win probability (Brier $0.212$ against a $0.249$ base rate,
+calibration error $0.023$). Player-level rank correlation with realised scoring
+is $0.48$ overall and $0.67$ for running backs. We also document two defects:
+projection intervals are too narrow, containing $69.3\%$ of outcomes at a nominal
+$80\%$, and a residual under-projection of $-0.82$ points per player-week persists
+after adjusting for availability.
+\end{abstract}
+
+\section{Introduction}
+
+Fantasy football scoring is a deterministic function of a stochastic process.
+Given the play-by-play record of a game, a player's fantasy points follow
+mechanically from a scoring rule; all of the uncertainty lives upstream, in
+which plays happen and to whom. This suggests an obvious modelling strategy ---
+simulate the upstream process and apply the scoring rule --- and yet the
+projections that dominate public fantasy tools are point estimates, typically a
+single expected number per player per week.
+
+A point estimate is the wrong object for almost every decision a fantasy manager
+actually makes. Choosing between two flex options is a question about which
+distribution is preferable given the rest of a lineup, not which mean is larger.
+Deciding whether to trade a consistent producer for a volatile one is explicitly
+a question about higher moments. Estimating a team's championship odds requires
+the joint distribution across a roster, because a manager who stacks a
+quarterback with his own receivers has a very different variance profile from
+one who does not, even at identical expected points.
+
+This paper describes \emph{Gridiron}, a system built around that observation.
+Its output is a set of simulated seasons and weeks --- by default $20{,}000$ of
+them --- from which any functional of the joint distribution can be read.
+
+Three commitments shape the design, and we state them at the outset because they
+are what the paper is really about.
+
+\paragraph{Correlation should be structural, not bolted on.}
+Two players in the same game are not independent draws. When a game turns into a
+shootout, both quarterbacks benefit; when a team falls behind, its running back
+loses carries and its receivers gain targets. Models that generate each player
+independently and then apply a correlation matrix are approximating a structure
+they could have simulated directly. We sample one margin and one total per
+fixture, allocate points to teams, allocate team production to players, and let
+the correlations fall out.
+
+\paragraph{The market is a strong prior, and double counting is the failure mode.}
+Closing betting lines aggregate more information than any freely available model
+will reconstruct. Anchoring to them is straightforward. The subtlety is what
+happens next: if the model then applies its own adjustment for a factor the
+market has \emph{already} priced, it counts that factor twice and degrades a
+good prior. We therefore test every candidate adjustment against the residual
+from the closing line, not against raw outcomes, and apply only what survives.
+Section~\ref{sec:environment} shows this distinction changing a design decision.
+
+\paragraph{Measured, including when the measurement is zero.}
+Every coefficient reported here was estimated from data. Where an effect that
+practitioners believe in fails to separate from noise, we report zero and retain
+the negative result in the source, so that the absence of a knob is legible as a
+finding rather than an oversight. Two such results appear below: altitude on
+kicking, and head-to-head history.
+
+\section{Data}
+
+All football data comes from the \texttt{nflverse} project, which publishes
+cleaned play-by-play, weekly player statistics, team statistics, rosters, depth
+charts, injury reports and schedules with closing betting lines. Consensus draft
+rankings come from a public mirror of FantasyPros expert consensus. Venue
+metadata --- coordinates, field elevation, roof type and surface for all 32
+current stadiums plus international sites --- was compiled for this work, as
+\texttt{nflverse} carries roof and surface per game but not location or
+elevation. Forecast weather is retrieved from Open-Meteo, which requires no
+credentials.
+
+Estimation samples are stated with each result. The two largest are 3{,}341
+outdoor team-games carrying both temperature and wind (1999--2025) and 12{,}787
+field-goal attempts with kick distance (2014--2025).
+
+\section{Model}
+
+\subsection{Game state}
+
+For each fixture $g$ we sample a margin and a total,
+\begin{align}
+M_g &\sim \mathcal{N}\!\left(s_g,\ \sigma_M^2\right), \\
+T_g &\sim \mathcal{N}\!\left(t_g,\ \sigma_T^2\right),
+\end{align}
+where $s_g$ and $t_g$ are the closing spread and total, and the dispersions
+$\sigma_M = 12.73$ and $\sigma_T = 13.19$ points are the residual standard
+deviations of realised outcomes around closing lines, estimated on the same
+historical sample. Team points follow by construction,
+\begin{equation}
+P^{\text{home}}_g = \tfrac{1}{2}(T_g + M_g), \qquad
+P^{\text{away}}_g = \tfrac{1}{2}(T_g - M_g),
+\end{equation}
+clipped to $[0, 80]$.
+
+Sampling at the level of the fixture rather than the team is the single most
+consequential structural choice in the model. Drawing two independent team
+scores permits both sides of a game to be simulated as winning, which is not a
+state of the world; more importantly, it destroys precisely the correlation that
+makes lineup construction interesting.
+
+\subsection{Usage allocation}
+
+Team production is allocated to players by Dirichlet draws over usage shares,
+\begin{equation}
+(\pi_{1}, \dots, \pi_{K}) \sim \mathrm{Dir}(\alpha \bar{\pi}_{1}, \dots, \alpha \bar{\pi}_{K}),
+\end{equation}
+where $\bar{\pi}_k$ are projected mean shares and the concentration $\alpha$ is
+fitted to observed week-to-week share variance. Separate allocations govern
+targets, carries and quarterback dropbacks.
+
+Mean shares are estimated by empirical-Bayes shrinkage of each player's history
+toward a positional and depth-chart prior, with explicit prior sample sizes so
+that a player with three games of history is pulled hard toward the prior and
+one with three seasons is not. Rates such as catch rate, yards per carry and
+interception rate receive the same treatment.
+
+\subsection{Season-level latent factors}
+
+Independent weekly sampling produces a leaderboard that is far too flat: it
+generates the average season repeatedly rather than the spread of seasons that
+actually occurs. We therefore draw, once per simulated season per player, latent
+multipliers on role and efficiency, together with a team-strength surprise
+($\sigma \approx 2.6$ points per game) and a pass/rush touchdown split. These
+persist across all weeks of that simulated season.
+
+A subtlety arises here that is easy to get wrong. A log-normal multiplier on
+Dirichlet concentration parameters inflates expected shares by Jensen's
+inequality, drifting the entire board upward by roughly 10\%. We normalise the
+shock by its share-weighted team mean so that expected shares are preserved.
+
+\subsection{Availability}
+
+Absences are persistent, not independent across weeks. We model availability as
+a two-state Markov chain per player, with transition probabilities fitted from
+injury-report history, so that a simulated injury produces a run of missed games
+rather than isolated zeros.
+
+\subsection{Market blending}
+
+Bottom-up projections are blended with consensus expert rankings by isotonic
+regression of model points-per-game on market rank, fitted \emph{within each
+position}. Fitting across positions is incorrect: an overall draft board encodes
+positional scarcity, so a quarterback taken 107th is not the 107th-best scorer,
+and only the within-position ordering carries points information.
+
+\section{Environmental effects}
+\label{sec:environment}
+
+\subsection{Identification}
+
+Marginal comparisons of outcomes across weather conditions confound weather with
+the teams that play in it: cold-weather franchises differ systematically from
+dome franchises. We therefore estimate within-team fixed effects, demeaning both
+outcomes and conditions by team-season, so that the identifying variation is the
+same team playing in better or worse conditions than it usually does.
+
+The second and more important choice is the dependent variable. To decide
+whether an adjustment should be applied \emph{on top of} a market-anchored
+total, the relevant quantity is not the outcome but the residual from the
+closing line. An effect visible in raw scoring but absent from the residual is
+one the market has already priced.
+
+\subsection{Results}
+
+Table~\ref{tab:weather} reports both. Per $10$ mph of wind, passing yards fall
+by $16.3$, completion rate by $1.5$ percentage points and yards per attempt by
+$0.32$; rushing share rises by $0.017$. Critically, the residual from the
+closing total falls by $1.83$ points and is significant: \emph{the market does
+not fully price wind}. Per $10^\circ$F of cold, the compositional effects are
+present and significant but the residual is $-0.07$ points and is not.
+
+\begin{table}[t]
+\centering
+\caption{Environmental effects, within-team fixed effects, 3{,}341 outdoor
+team-games. ``vs.\ line'' is the residual of realised total from the closing
+total --- the quantity that determines whether an adjustment is additive to a
+market-anchored model or duplicative of it.}
+\label{tab:weather}
+\begin{tabular}{lrrl}
+\toprule
+& per $+10$ mph wind & per $-10^\circ$F & \\
+\midrule
+Rushing share        & $+0.0167$ & $+0.0071$ & both significant \\
+Completion rate      & $-0.0152$ & $-0.0066$ & both significant \\
+Yards per attempt    & $-0.324$  & $-0.082$  & both significant \\
+Passing yards        & $-16.30$  & $-3.57$   & both significant \\
+Rushing yards        & $+1.71$   & $+1.84$   & wind n.s. \\
+\midrule
+\textbf{Total vs.\ line} & $\mathbf{-1.83}$ & $-0.07$ & \textbf{wind significant}; cold n.s. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The model therefore applies the wind effect to the game total and the
+temperature effect to composition only. Applying temperature to the total as
+well would count it twice, since the closing line already reflects it.
+
+\subsection{Kicking, and a negative result on altitude}
+
+Raw field-goal percentage appears to fall with wind and then recover above
+$15$ mph, which is an artefact of attempt selection: coaches stop attempting
+long kicks in difficult conditions, so the surviving attempts are easier. We
+therefore fit make probability conditional on distance,
+\begin{equation}
+\Pr(\text{made}) = \sigma\!\left(\beta_0 + \beta_d d + \beta_w w + \beta_t \tau + \beta_e e\right),
+\end{equation}
+on 12{,}787 attempts. Results appear in Table~\ref{tab:kick}.
+
+\begin{table}[t]
+\centering
+\caption{Field-goal accuracy conditional on distance, 12{,}787 attempts
+(8{,}372 outdoor with weather). Coefficients are on the logit scale; the final
+column converts to equivalent yards of kick distance.}
+\label{tab:kick}
+\begin{tabular}{lrrr}
+\toprule
+& coefficient & std.\ error & equivalent yards \\
+\midrule
+Distance (per yard)      & $-0.1116$ & $0.0038$ & --- \\
+Wind (per $10$ mph)      & $-0.1817$ & $0.0626$ & $-1.63$ \\
+Temperature (per $-10^\circ$F) & $-0.0186$ & $0.0188$ & n.s. \\
+Elevation (per $1{,}000$ ft)   & $-0.0013$ & $0.0282$ & $-0.01$, n.s. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Wind costs $1.63$ yards of effective range per $10$ mph. Altitude does not
+separate from zero. Denver's attempts average $39.2$ yards against $38.7$
+elsewhere, and conditional accuracy is flat in elevation. The underlying physics
+is not in doubt --- air density at $5{,}280$ ft is roughly $82\%$ of sea level
+--- but the effect on professional kickers is below the noise floor of this
+sample. The model applies no altitude adjustment, and the estimate is retained
+in the source so that its absence reads as a finding.
+
+\section{Matchup effects}
+
+Two quantities are commonly called ``matchup history'' and they behave
+differently.
+
+\paragraph{Team-versus-team history predicts nothing.}
+On 5{,}798 games with at least two prior meetings, regressing the residual from
+the closing spread on the mean margin of the last six meetings gives
+$\beta = 0.043$ ($\mathrm{se} = 0.022$), $r = 0.026$, $R^2 = 0.0007$; using only
+the most recent meeting gives $r = 0.003$. Neither is significant. Whatever it
+means for one team to ``own'' another, it does not survive a point spread. The
+system computes and displays this history, and weights it at exactly zero.
+
+\paragraph{Defence-versus-position history does predict.}
+Evaluated strictly out of sample --- prior weeks only, predicting the following
+week --- a defence's relative fantasy points allowed to a position carries the
+coefficients in Table~\ref{tab:matchup}, all significant.
+
+\begin{table}[t]
+\centering
+\caption{Out-of-sample predictive weight of a defence's prior relative fantasy
+points allowed, by position. The fitted $\beta$ \emph{is} the shrinkage applied
+in production.}
+\label{tab:matchup}
+\begin{tabular}{lrrrr}
+\toprule
+Position & $n$ & $\beta$ & std.\ error & $r$ \\
+\midrule
+QB & 3{,}989 & $0.209$ & $0.040$ & $0.082$ \\
+RB & 3{,}998 & $0.266$ & $0.039$ & $0.108$ \\
+WR & 3{,}998 & $0.176$ & $0.045$ & $0.062$ \\
+TE & 3{,}979 & $0.163$ & $0.041$ & $0.063$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+These coefficients are not chosen; they \emph{are} the correct shrinkage. A
+defence that has allowed $67\%$ more than average to tight ends should be
+expected to allow about $11\%$ more next week, not $67\%$: regression to the
+mean is most of the story, and $\beta$ measures how much of it. The adjustment
+is applied weekly only. Over a full season a team faces seventeen defences and
+the effect averages out, so incorporating it into a season-long draft ranking
+would add noise in the costume of information.
+
+\section{Held-out evaluation}
+
+\subsection{Protocol}
+
+We hold out the 2025 season entirely. A cutoff mechanism caps every historical
+load at 2024, including explicit multi-season requests, so that usage profiles,
+efficiency priors, team-strength estimates and all fitted constants are computed
+without any 2025 observation. Schedules for 2025 remain visible --- fixtures and
+closing lines are pre-game information and are the anchor the model is built on
+--- but their result columns are redacted at load time, so no estimator can
+observe an outcome.
+
+We regard this redaction as the essential detail. An earlier version of the
+protocol capped only the default ``load all history'' path, while
+\texttt{team\_context} requested seasons explicitly and thereby saw the entire
+holdout season. That version reported a margin MAE of $6.97$ against a market
+benchmark of $12.03$ and an implied $84\%$ against the spread --- results that
+are impossible, and whose implausibility is what exposed the leak. We report the
+episode because a leaked backtest is worse than none, and because its signature
+was not a warning but an implausibly good number.
+
+Weekly matchup factors are permitted to use prior weeks within the holdout
+season, as they would be in live use.
+
+\subsection{Determinism as a correctness check}
+
+Establishing the holdout also surfaced a class of defect we had not been looking
+for. Running the backtest twice on identical inputs produced different metrics
+--- margin MAE moving in the third decimal, and the against-the-spread rate
+moving by six percentage points. Since the simulation is explicitly seeded, this
+should have been impossible, and chasing it found three genuine bugs upstream of
+the simulator.
+
+First, the market board assigned integer ranks after sorting on average draft
+position alone. Players tied on ADP therefore took ranks in whatever order the
+sort happened to emit. Because the market blend is a global isotonic fit over
+those ranks, a permutation of three tied players moved projected points for most
+of the board.
+
+Second, kickers were modelled by a dedicated routine \emph{and} carried in the
+general roster pool, and the two were concatenated. Twenty-nine players appeared
+on the board twice, where they double-counted in every team-level aggregation.
+
+Third, the routine that reduces each team to one kicker did so with an
+order-dependent deduplication. Beyond flipping between runs, it selected the
+wrong player: Cincinnati resolved to a kicker with no recent attempts over the
+incumbent starter. Selection now ranks by attempts in the previous two seasons
+with an identifier tiebreak.
+
+None of these would have been caught by the test suite, which asserts properties
+of a single run. All three were caught by the weaker requirement that two
+identical runs agree. We note it because determinism is usually filed under
+engineering hygiene, and here it functioned as a correctness test that the
+statistical checks did not replicate. After the fixes the backtest reproduces
+bit-for-bit, and all figures below are from a reproducible run.
+
+\subsection{Game-level results}
+
+Table~\ref{tab:game} reports performance over 272 regular-season games.
+
+\begin{table}[t]
+\centering
+\caption{Held-out 2025 season, game level, 272 games at $6{,}000$ simulations
+each. Market benchmarks use the closing line.}
+\label{tab:game}
+\begin{tabular}{lrr}
+\toprule
+& Model & Closing line \\
+\midrule
+Margin MAE            & $9.71$  & $9.72$ \\
+Margin RMSE           & $12.27$ & --- \\
+Total MAE             & $10.39$ & $10.39$ \\
+Total RMSE            & $13.18$ & --- \\
+\midrule
+Win accuracy          & $0.654$ & --- \\
+Brier score           & $0.212$ & base rate $0.249$ \\
+Log loss              & $0.608$ & --- \\
+Calibration error     & $0.023$ & --- \\
+Beat the closing line & $0.559$ & $z = 1.94$, n.s. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The model reproduces the closing line almost exactly on both margin and total,
+and does not demonstrably beat it. The $55.9\%$ against the spread is the one
+figure here that might look like an edge, and it is not one: over 272 games the
+standard error on a coin flip is $3.0$ percentage points, so this is $1.94$
+standard errors from chance --- the kind of result that arises about one season
+in twenty by luck alone. A single season cannot separate a $56\%$ bettor from a
+$50\%$ one, and we do not claim to be the former. This is what a model should
+look like when it takes the closing line as its prior and adjusts only for
+effects it can demonstrate are unpriced. Win probabilities are well calibrated, with a calibration error of
+$0.023$ and close agreement between predicted and realised frequencies in every
+bin below $0.8$; the top bin ($n = 23$) realises $0.957$ against a predicted
+$0.853$, which at that sample size is two games.
+
+We emphasise this null result. The system is not a betting edge on game
+outcomes, and reporting it as one would be false. Its value lies downstream, in
+allocating a well-calibrated game distribution to individual players.
+
+\subsection{Player-level results}
+
+Table~\ref{tab:player} reports 5{,}237 player-weeks. Because a projection
+averages over simulations in which a player was injured or benched and scored
+zero, while an actual is observed only when he played, we report error both
+unconditionally and divided by the simulated active share.
+
+\begin{table}[t]
+\centering
+\caption{Held-out 2025 season, player level. ``$\mid$played'' divides the
+projection by simulated availability, which is the like-for-like comparison
+against outcomes that are observed only when the player appeared. The final
+column is the share of outcomes inside the nominal $80\%$ interval.}
+\label{tab:player}
+\begin{tabular}{lrrrrrrr}
+\toprule
+& $n$ & MAE & MAE$\mid$played & bias & bias$\mid$played & Spearman $\rho$ & in 80\% band \\
+\midrule
+All & 5{,}237 & $4.97$ & $4.96$ & $-1.65$ & $-0.82$ & $0.482$ & $69.3\%$ \\
+QB  & 564     & $7.12$ & $6.90$ & $-3.46$ & $-1.83$ & $0.445$ & $60.6\%$ \\
+RB  & 1{,}317 & $4.63$ & $4.55$ & $-2.88$ & $-2.11$ & $0.666$ & $75.3\%$ \\
+WR  & 2{,}047 & $4.39$ & $4.47$ & $-1.27$ & $-0.33$ & $0.638$ & $83.4\%$ \\
+TE  & 929     & $4.22$ & $4.07$ & $-3.54$ & $-3.19$ & $0.541$ & $62.0\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Rank correlation with realised scoring is $0.67$ for running backs and $0.64$
+for receivers, the two positions where usage is most persistent, and weakest for
+quarterbacks, where a small population and high touchdown variance dominate.
+
+\section{Limitations}
+
+Two defects are visible in Table~\ref{tab:player} and we state them plainly.
+
+\paragraph{Intervals are too narrow.}
+The nominal $80\%$ interval contains $69.3\%$ of outcomes, and only $60.6\%$ for
+quarterbacks and $62.0\%$ for tight ends. The model understates tail risk, which
+means published boom and bust rates are conservative and the distribution is
+sharper than the world. For a system whose entire premise is that the
+distribution matters more than the mean, this is the most consequential
+weakness, and closing it should take priority over any improvement to central
+tendency.
+
+\paragraph{Residual under-projection.}
+After adjusting for availability, projections remain low by $0.82$ points per
+player-week overall and by $3.19$ for tight ends. Part of this is selection: the
+evaluation sample contains players who accumulated statistics, and preseason
+projections spread opportunity across a depth chart while realised opportunity
+concentrates. Part is likely genuine miscalibration of touchdown rates. We have
+not separated the two.
+
+Further limitations: the model has no representation of benching, which is why
+replacement-level quarterbacks project too favourably; weather beyond
+temperature, wind and forecast precipitation is ignored, and precipitation
+effects are a stated prior rather than a fitted coefficient because
+\texttt{nflverse} does not carry precipitation; kicker and defence models are
+deliberately simple; and the evaluation covers a single season, so all
+differences reported here are subject to one-season sampling variation.
+
+\section{Conclusion}
+
+The contribution of this work is less a modelling technique than a discipline.
+Simulating games rather than players yields correlations for free. Anchoring to
+market lines yields a strong prior for free. What is \emph{not} free, and what
+we argue deserves more attention than it usually receives, is the question of
+which adjustments the prior has already absorbed. Wind survives that test;
+temperature does not. Positional matchup history survives it; team-versus-team
+history does not. Altitude, despite sound physics and firm folk belief, does not
+survive at any sample size available to us.
+
+On a genuinely held-out season the resulting system matches the closing line
+without beating it, produces well-calibrated win probabilities, and ranks player
+scoring with a correlation of $0.48$ overall and $0.67$ for running backs. It
+also produces intervals that are too narrow and projections that are slightly
+too low. We report the negative results and the defects alongside the positive
+ones, on the view that a projection system whose failures are documented is more
+useful than one whose successes are.
+
+\section*{Reproducibility}
+
+The system, the fitting scripts and the backtest harness are available in the
+project repository. The holdout is reproduced with
+\texttt{python scripts/backtest.py --season 2025 --sims 6000}, which sets the
+training cutoff, rebuilds every estimator from data through 2024, predicts all
+272 games and writes the metrics reported here. All figures in
+Tables~\ref{tab:weather}--\ref{tab:player} are produced by that pipeline.
+
+\end{document}

@@ -15,6 +15,8 @@ Constants below were fit on 2021-2025 nflverse data:
 from __future__ import annotations
 
 import numpy as np
+import logging
+
 import polars as pl
 
 from ..data import nflverse as nv
@@ -27,6 +29,9 @@ FG_MAKE_RATE = {"0_39": 0.965, "40_49": 0.817, "50_plus": 0.708}
 
 DST_BASE = {"sacks": 2.393, "interceptions": 0.756, "fumble_recoveries": 0.505,
             "tds": 0.0662, "safeties": 0.0239}
+
+
+log = logging.getLogger(__name__)
 
 
 def kicker_projections(team_weeks: pl.DataFrame, season: int,
@@ -42,8 +47,12 @@ def kicker_projections(team_weeks: pl.DataFrame, season: int,
     ks = nv.team_abbr_fixes(ks, ["team"]).unique(subset=["player_id"])
     if ks.is_empty():
         return pl.DataFrame()
-    # One kicker per team: the depth chart rarely lists a second.
-    ks = ks.unique(subset=["team"], keep="first")
+
+    # One kicker per team, chosen by recent workload rather than by whichever
+    # row the roster happened to list first. When a team carries two, an
+    # arbitrary pick both flipped between builds and sometimes named the wrong
+    # man — Cincinnati resolved to Cade York over Evan McPherson.
+    ks = _pick_starting_kickers(ks, season)
 
     tw = team_weeks.group_by("team").agg(pl.col("implied_points").mean().alias("t_points"))
     df = ks.join(tw, on="team", how="left").with_columns(
@@ -65,6 +74,31 @@ def kicker_projections(team_weeks: pl.DataFrame, season: int,
         (pl.col("fg_att_pg") * exp_fg_points + pl.col("pat_att_pg") * 0.96 * s.pat_made)
         .alias("model_ppg"),
     )
+
+
+def _pick_starting_kickers(ks: pl.DataFrame, season: int) -> pl.DataFrame:
+    """Resolve each team to one kicker: most recent attempts, then player_id.
+
+    Attempts over the previous two seasons are the best freely available signal
+    for who actually kicks. The player_id tiebreak is what makes the choice
+    total, so an identical build produces an identical board.
+    """
+    try:
+        stats = nv.load_player_stats([season - 2, season - 1])
+        if "fg_att" in stats.columns:
+            recent = (stats.group_by("player_id")
+                        .agg(pl.col("fg_att").fill_null(0).sum().alias("recent_fg_att")))
+            ks = ks.join(recent, on="player_id", how="left")
+    except Exception as exc:  # noqa: BLE001
+        log.info("kicker workload unavailable, falling back to id order: %s", exc)
+
+    if "recent_fg_att" not in ks.columns:
+        ks = ks.with_columns(pl.lit(0.0).alias("recent_fg_att"))
+
+    return (ks.with_columns(pl.col("recent_fg_att").fill_null(0.0))
+              .sort(["team", "recent_fg_att", "player_id"], descending=[False, True, False])
+              .unique(subset=["team"], keep="first", maintain_order=True)
+              .drop("recent_fg_att"))
 
 
 def dst_projections(team_weeks: pl.DataFrame, season: int,
