@@ -325,10 +325,78 @@ export async function markets(root) {
         { key: 'status', label: 'Status', cls: 'dim' },
       ], { empty: 'No trades yet' }), { flush: true }));
 
-    wrap.replaceChildren(venueCards,
+    const sentimentBox = el('div', { style: 'margin-top:14px' },
+      el('div', { class: 'empty' }, el('span', { class: 'loading' }), ' reading public prices'));
+
+    wrap.replaceChildren(venueCards, sentimentBox,
       el('div', { style: 'margin-top:14px' },
         panel('Model vs market', signalBox, { actions: [scanBtn] })),
       tradesCard);
+
+    // Sentiment loads on its own so a slow venue never blocks the rest of the
+    // page, and it needs neither credentials nor a finished simulation.
+    loadSentiment(sentimentBox);
+  }
+
+  async function loadSentiment(box) {
+    let d;
+    try {
+      d = await api.get('/api/markets/sentiment');
+    } catch (err) {
+      box.replaceChildren(panel('Public sentiment',
+        el('div', { class: 'note bad' }, String(err))));
+      return;
+    }
+
+    if (!d.consensus.length) {
+      const down = (d.venues || []).filter((v) => !v.reachable);
+      box.replaceChildren(panel('Public sentiment', el('div', { class: 'note' },
+        down.length
+          ? `No venue is reachable right now. ${down.map((v) => `${v.venue}: ${v.detail}`).join(' · ')}`
+          : 'Both venues answered but listed no NFL contracts — normal in the offseason.'),
+        { actions: [led('off')] }));
+      return;
+    }
+
+    const stats = el('div', { class: 'grid g4', style: 'margin-bottom:12px' },
+      panel('Questions priced', gauge('contracts', fmt.i(d.question_count),
+        `${fmt.i(d.quote_count)} quotes across ${d.venues.filter((v) => v.reachable).length} venue(s)`)),
+      panel('Money at stake', gauge('volume', fmt.money(d.total_volume), 'across all listed NFL contracts')),
+      panel('Both venues', gauge('overlap', fmt.i(d.both_venues),
+        'questions quoted on Kalshi and Polymarket')),
+      panel('Widest split', d.widest_disagreement
+        ? gauge('disagreement', fmt.pct(d.widest_disagreement.disagreement, 1),
+            d.widest_disagreement.label)
+        : gauge('disagreement', '—', 'no question is quoted on both')));
+
+    const rows = table(d.consensus, [
+      { key: 'label', label: 'Question', cls: 'name' },
+      { key: 'kind', label: 'Type', cls: 'dim' },
+      { key: 'probability', label: 'Crowd', cls: 'num',
+        fmt: (v) => el('b', {}, fmt.pct(v, 1)) },
+      { key: 'probability', label: 'Implied odds', cls: 'num dim',
+        fmt: (v) => (v > 0 && v < 1
+          ? (v >= 0.5 ? `-${Math.round(100 * v / (1 - v))}` : `+${Math.round(100 * (1 - v) / v)}`)
+          : '—') },
+      { key: 'volume', label: 'Volume', cls: 'num', fmt: (v) => fmt.money(v) },
+      { key: 'venues', label: 'Venues', cls: 'dim', fmt: (v) => v.join(' · ') },
+      { key: 'overround', label: 'Vig', cls: 'num dim',
+        fmt: (v) => (v == null ? '—' : fmt.pct(v, 1)) },
+      { key: 'disagreement', label: 'Split', cls: 'num',
+        fmt: (v) => (v == null ? '—'
+          : el('span', { class: v > 0.05 ? 'warn' : 'dim' }, fmt.pct(v, 1))) },
+    ], { sortKey: 'volume', sortDesc: true, empty: 'nothing priced' });
+
+    box.replaceChildren(stats, panel('Public sentiment', rows, {
+      flush: true,
+      meta: `read-only · fetched ${d.fetched_at}`,
+      actions: [led('on'), el('button', { class: 'btn ghost sm',
+        onclick: () => loadSentiment(box) }, 'Refresh')],
+    }), el('div', { class: 'note', style: 'margin-top:8px' },
+      'Public prices, no account involved. "Crowd" is the volume-and-spread weighted '
+      + 'consensus; where both sides of a game are quoted the house edge is removed '
+      + 'exactly, and "Vig" is how much there was. "Split" is how far the two venues '
+      + 'disagree — a wide split is itself a signal.'));
   }
 
   function signalTable(r) {

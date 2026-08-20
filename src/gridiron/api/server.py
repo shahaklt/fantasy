@@ -36,6 +36,7 @@ from ..exchange.polymarket import PolymarketClient
 from ..exchange.matching import ProbabilityBook
 from ..exchange.risk import RiskGuard, RiskLimits
 from ..exchange.router import MarketRouter, extract_teams
+from ..exchange.sentiment import snapshot as sentiment_snapshot
 from ..exchange.store import TickStore
 from ..quant.microstructure import price_momentum, realised_volatility
 from ..scheduler import build_default_scheduler
@@ -498,7 +499,9 @@ def _games(week: int, n_sims: int = DEFAULT_SIMS):
     if cached:
         return cached
     a = arts(need_sims=True)
-    analyst = GameAnalyst(a.engine)
+    analyst = GameAnalyst(a.engine,
+                          team_weeks=a.projections.team_weeks if a.projections else None,
+                          season=current_season())
     preds, players = analyst.predict_week(week, n_sims=n_sims)
     state.game_cache[key] = (analyst, preds, players)
     return state.game_cache[key]
@@ -609,6 +612,18 @@ def markets(nfl_only: bool = True, limit: int = Query(200, le=1000)):
         "count": len(found),
         "markets": [m.as_dict() for m in found[:limit]],
     })
+
+
+@app.get("/api/markets/sentiment")
+def market_sentiment(nfl_only: bool = True, limit: int = Query(500, le=1000)):
+    """What the public markets currently think, with no account required.
+
+    Deliberately separate from /api/markets/signals: that prices contracts
+    against this model and only shows disagreements worth acting on. This shows
+    the crowd's own view, so the page is useful before a simulation has ever
+    been run and without credentials.
+    """
+    return _clean(sentiment_snapshot(state.router, nfl_only=nfl_only, limit=limit))
 
 
 @app.post("/api/markets/signals")
