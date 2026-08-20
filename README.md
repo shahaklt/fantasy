@@ -143,6 +143,49 @@ arithmetic saves. The split is deliberate.
 
 ## Using it
 
+### Learn the numbers first
+
+**Stats Guide** (sidebar, or press <kbd>?</kbd>) documents all 38 stats the app
+shows: what each one is, how to read it, and the trap. It opens with four ideas
+the rest depends on, then a step-by-step draft-day order and the weekly
+in-season loop, then a filterable reference grouped by where the stat appears.
+
+If you read nothing else, read the four concepts at the top — most mistakes with
+this tool come from treating a projection as a prediction, or comparing points
+across positions.
+
+### Connect your ESPN league (recommended)
+
+**ESPN League** in the sidebar. Enter your league ID — and, for a private
+league, the `espn_s2` and `SWID` cookies from a signed-in browser session
+(the page tells you where to find them). Then pick your team and press
+**Sync my league**.
+
+One sync imports all of it: the league's real scoring and roster slots, your
+players, your completed draft picks and your weekly schedule. My League and the
+Draft Room read them directly, so nothing is entered twice. Rebuild afterwards
+so the simulations use your actual scoring.
+
+It also unlocks two comparisons against ESPN's own projections:
+
+- **Compare projections** lines up every player both boards know about and ranks
+  the disagreements. ESPN's numbers are what the rest of your league sees, so a
+  gap is a mispricing *inside your league* whether or not it turns out to be the
+  better forecast.
+- **Score vs actuals** is the honest test: both weekly projections measured
+  against what actually happened, on the same players and weeks, by mean
+  absolute error, RMSE, correlation and head-to-head win rate. It refuses to
+  declare a winner on a small sample.
+
+The **Draft Room** also has *Import ESPN draft*, which replays a completed ESPN
+draft onto the board rather than making you re-enter it pick by pick. And
+*My roster vs ESPN* shows where ESPN under- and over-rates the players you
+already own, which is what decides whether to buy or sell them.
+
+Cookies live in `data/user/espn_credentials.json` with owner-only permissions
+and are sent nowhere but ESPN. They expire every few months; re-copy them if a
+working connection starts failing.
+
 ### Set up your league first
 **Settings** → teams, scoring preset, roster slots, your draft slot → *Save &
 rebuild*. Everything downstream (replacement level, auction values, the
@@ -175,6 +218,21 @@ producing an enormous position.
 **Live Tape** streams order books and derives the microstructure signals.
 Sentiment usually shows up as persistent order-flow imbalance before it reaches
 the last-traded price.
+
+### Getting around
+
+| Key | Does |
+| --- | --- |
+| <kbd>⌘K</kbd> / <kbd>Ctrl K</kbd> | command palette — jump to any view, or search a player |
+| <kbd>Alt</kbd>+<kbd>1…9</kbd> | jump straight to a view |
+| <kbd>?</kbd> | open the Stats Guide |
+| <kbd>Esc</kbd> | close the drawer or palette |
+
+The strip under the header is a live machine readout: simulation state, run
+count, engine, scheduler, trading mode and venue count. Numeric columns shade
+themselves by percentile, so you can read the shape of a column without reading
+any single number in it, and the **Range** column draws each player's floor,
+median and ceiling on one rule.
 
 ---
 
@@ -362,19 +420,21 @@ gridiron doctor                         check GPU, data sources, venues, trading
 src/gridiron/
   config.py          paths, backend detection, VRAM-aware chunking
   scoring.py         league settings and fantasy point arithmetic
-  data/              nflverse + market loaders, parquet cache
+  data/              nflverse + market loaders, ESPN league adapter, parquet cache
   features/          team context, player usage and efficiency profiles
   models/            projections, availability, kickers and defences
   sim/               Monte Carlo engine, array backend, league simulation
   draft/             VBD, tiers, availability curve, draft simulator
   quant/             odds, devig, Stern model, Kelly, calibration, microstructure
   exchange/          Kalshi, Polymarket, paper broker, risk guard, tick store
-  analysis/          game predictions and breakdowns
+  analysis/          game predictions, breakdowns, and the ESPN comparison
   api/               FastAPI server
   cli.py             command line
 web/                 single-page frontend (no build step, no CDN)
+  assets/guide-data.js   the stats reference content
+  assets/guide.js        the Stats Guide view
 scripts/             calibration and validation
-tests/               144 tests
+tests/               170 tests
 ```
 
 ## Tests

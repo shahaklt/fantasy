@@ -4,42 +4,74 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Gridiron</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏈</text></svg>" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%2305080c'/><text x='16' y='23' font-size='18' font-family='monospace' fill='%233ddbd9' text-anchor='middle'>G</text></svg>" />
 <link rel="stylesheet" href="/assets/styles.css" />
 </head>
 <body>
 <div id="app">
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">🏈</span><div><b>Gridiron</b><small id="brand-season">—</small></div></div>
+    <div class="brand">
+      <span class="brand-mark">G</span>
+      <div><b>GRIDIRON</b><small id="brand-season">— — —</small></div>
+    </div>
     <nav id="nav">
-      <button data-view="dashboard" class="active"><i>◆</i>Dashboard</button>
-      <button data-view="projections"><i>▤</i>Projections</button>
-      <button data-view="draft"><i>✦</i>Draft Room</button>
-      <button data-view="games"><i>◈</i>Games</button>
-      <button data-view="markets"><i>⇄</i>Markets</button>
-      <button data-view="live"><i>◉</i>Live Tape</button>
-      <button data-view="league"><i>♛</i>My League</button>
-      <button data-view="settings"><i>⚙</i>Settings</button>
+      <button data-view="dashboard" class="active"><i>◧</i><span>Dashboard</span><kbd>1</kbd></button>
+      <button data-view="projections"><i>▤</i><span>Projections</span><kbd>2</kbd></button>
+      <button data-view="draft"><i>◆</i><span>Draft Room</span><kbd>3</kbd></button>
+      <button data-view="games"><i>◈</i><span>Games</span><kbd>4</kbd></button>
+      <button data-view="league"><i>▩</i><span>My League</span><kbd>5</kbd></button>
+      <button data-view="espn"><i>⬡</i><span>ESPN League</span><kbd>0</kbd></button>
+      <div class="nav-sep"></div>
+      <button data-view="markets"><i>⇄</i><span>Markets</span><kbd>6</kbd></button>
+      <button data-view="live"><i>◉</i><span>Live Tape</span><kbd>7</kbd></button>
+      <div class="nav-sep"></div>
+      <button data-view="guide"><i>?</i><span>Stats Guide</span><kbd>8</kbd></button>
+      <button data-view="settings"><i>⚙</i><span>Settings</span><kbd>9</kbd></button>
     </nav>
     <div class="sidebar-foot">
-      <div class="chip" id="chip-backend">compute —</div>
-      <div class="chip" id="chip-mode">mode —</div>
-      <div class="chip" id="chip-built">built —</div>
+      <div class="chip"><span>compute</span><b id="chip-backend">—</b></div>
+      <div class="chip"><span>trading</span><b id="chip-mode">—</b></div>
+      <div class="chip"><span>built</span><b id="chip-built">—</b></div>
     </div>
   </aside>
+
   <main id="main">
     <header class="topbar">
       <div id="crumb">Dashboard</div>
       <div class="topbar-actions">
         <span id="toast" class="toast"></span>
+        <button id="btn-palette" class="btn ghost">⌘K</button>
         <button id="btn-refresh" class="btn ghost">Refresh data</button>
         <button id="btn-rebuild" class="btn primary">Rebuild sims</button>
       </div>
     </header>
+    <div class="readout" id="readout"></div>
     <section id="view"></section>
   </main>
 </div>
-<div id="drawer" class="drawer"><div class="drawer-inner"><button id="drawer-close" class="drawer-close">✕</button><div id="drawer-body"></div></div></div>
+
+<div id="drawer" class="drawer">
+  <div class="drawer-inner">
+    <div class="drawer-head">
+      <div id="drawer-title" class="panel-title">Detail</div>
+      <button id="drawer-close" class="drawer-close">✕</button>
+    </div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </div>
+</div>
+
+<div id="palette" class="palette">
+  <div class="palette-box">
+    <input id="palette-input" placeholder="Jump to a view or search a player…" autocomplete="off" spellcheck="false" />
+    <div id="palette-list" class="palette-list"></div>
+    <div class="palette-hint">
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> open</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
 <script type="module" src="/assets/app.js"></script>
 </body>
 </html>
