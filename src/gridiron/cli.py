@@ -22,29 +22,55 @@ app = typer.Typer(add_completion=False, help="Monte Carlo fantasy football and m
 console = Console()
 
 
+def _print_qr(url: str) -> bool:
+    from . import net
+
+    drawing = net.qr_terminal(url)
+    if drawing:
+        console.print("")
+        print(drawing)          # raw: rich would try to style the block characters
+        return True
+    return False
+
+
 def _print_pairing(host: str, port: int, token: str | None, guarded: bool,
-                   heading: str = "Open on your phone") -> None:
+                   heading: str = "Open on your phone", every: bool = False) -> None:
     """The whole pairing story in one block: where, with what, and how to scan."""
+    import sys
+
     from . import net
 
     pair = net.pairing(host, port, token, guarded)
     console.print(f"\n[bold cyan]{heading}[/]  [dim](same wifi as this machine)[/]")
-    console.print(f"  [bold]{pair.url}[/]")
-    for alt in pair.alternates():
-        console.print(f"  [dim]or {alt}[/]")
 
-    drawing = net.qr_terminal(pair.url)
-    if drawing:
-        console.print("")
-        # Printed raw: rich would try to style the block characters.
-        print(drawing)
-    elif guarded:
-        console.print("  [dim]pip install segno to get a scannable QR code here[/]")
+    candidates = net.address_candidates()
+    if every and len(candidates) > 1:
+        # One code per address, because when the first one does not load there
+        # is otherwise nothing to try.
+        for candidate in candidates:
+            url = net.panel_url(candidate.address, port, token)
+            marker = " [dim](routed)[/]" if candidate.routed else ""
+            console.print(f"\n  [bold]{url}[/]{marker}")
+            if candidate.hint:
+                console.print(f"  [yellow]{candidate.hint}[/]")
+            _print_qr(url)
+    else:
+        console.print(f"  [bold]{pair.url}[/]")
+        for alt in pair.alternates():
+            console.print(f"  [dim]or {alt}[/]")
+        if not _print_qr(pair.url) and guarded:
+            console.print("  [dim]pip install segno to get a scannable QR code here[/]")
 
     if guarded:
         console.print(f"  access token: [bold]{token}[/]")
         console.print("  [dim]the link carries the token; after the first load the device is "
                       "remembered[/]")
+        if len(candidates) > 1 and not every:
+            console.print(f"  [dim]{len(candidates)} addresses on this machine — "
+                          "`gridiron pair --all` prints a code for each[/]")
+        if sys.platform.startswith("win"):
+            console.print("  [dim]if the phone shows nothing at all, allow Python on Private "
+                          "networks in Windows Defender Firewall[/]")
     else:
         console.print("  [yellow]no token required — bound to loopback only[/]")
 
@@ -127,8 +153,15 @@ def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False,
 
 
 @app.command()
-def pair(port: int = 8000, rotate: bool = typer.Option(False, help="issue a new token first")):
-    """Reprint the phone pairing link and QR code for a running server."""
+def pair(port: int = 8000, rotate: bool = typer.Option(False, help="issue a new token first"),
+         all: bool = typer.Option(False, "--all",
+                                  help="a QR code for every address on this machine")):
+    """Reprint the phone pairing link and QR code for a running server.
+
+    If the phone will not load the first address, `--all` prints one code per
+    network interface: a machine with a VM, Docker or a VPN has several, and
+    only one of them is the wifi your phone is on.
+    """
     from .api import access
 
     if rotate:
@@ -138,7 +171,8 @@ def pair(port: int = 8000, rotate: bool = typer.Option(False, help="issue a new 
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(1) from exc
         console.print("[yellow]token rotated — previously paired devices must scan again[/]")
-    _print_pairing("0.0.0.0", port, access.access_token(), True, heading="Pair a device")
+    _print_pairing("0.0.0.0", port, access.access_token(), True,
+                   heading="Pair a device", every=all)
 
 
 @app.command()
