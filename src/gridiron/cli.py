@@ -16,7 +16,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .config import current_season, detect_backend
+from .config import DEFAULT_SIMS, current_season, detect_backend
 
 app = typer.Typer(add_completion=False, help="Monte Carlo fantasy football and market engine")
 console = Console()
@@ -189,7 +189,7 @@ def refresh(force: bool = True):
 
 
 @app.command()
-def build(sims: int = 5000, season: int | None = None, refresh_first: bool = False):
+def build(sims: int = DEFAULT_SIMS, season: int | None = None, refresh_first: bool = False):
     """Rebuild projections and run the season simulation."""
     from . import pipeline
 
@@ -207,7 +207,7 @@ def build(sims: int = 5000, season: int | None = None, refresh_first: bool = Fal
 
 
 @app.command()
-def validate(sims: int = 2000, season: int | None = None):
+def validate(sims: int = DEFAULT_SIMS, season: int | None = None):
     """Compare simulated positional finishes against actual history."""
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "scripts"))
     from validate_totals import main as run_validation  # type: ignore

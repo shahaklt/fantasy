@@ -1,6 +1,6 @@
 // Dashboard, Projections, Settings and My League views.
 import { $, api, bar, barChart, bounds, distBar, el, fmt, gauge, heatCell, histogram, kv,
-         led, metric, panel, posTag, sparkline, table, toast } from './ui.js';
+        led, metric, panel, posTag, SIMS, sparkline, table, toast } from './ui.js';
 
 export const store = { status: null, league: null, board: [], week: 1 };
 
@@ -481,7 +481,7 @@ export async function settings(root) {
           onclick: async (e) => {
             e.target.disabled = true; e.target.textContent = 'queued';
             try {
-              const r = await api.post('/api/rebuild', { n_sims: 5000 });
+              const r = await api.post('/api/rebuild', { n_sims: SIMS });
               toast(r.started ? 'rebuilding in the background' : r.detail);
             } catch (err) { toast(String(err), true); }
             e.target.disabled = false; e.target.textContent = 'Rebuild simulations';
@@ -492,7 +492,7 @@ export async function settings(root) {
           onclick: async (e) => {
             e.target.disabled = true; e.target.textContent = 'running';
             try {
-              const r = await api.post('/api/rebuild', { n_sims: 5000, refresh_data: true });
+              const r = await api.post('/api/rebuild', { n_sims: SIMS, refresh_data: true });
               toast(r.started ? 'fetching then rebuilding' : r.detail);
             } catch (err) { toast(String(err), true); }
             e.target.disabled = false; e.target.textContent = 'Fetch + rebuild';
@@ -538,7 +538,7 @@ export async function settings(root) {
               roster,
             });
             toast('Saved — rebuilding simulations…');
-            await api.post('/api/rebuild', { n_sims: 5000 });
+            await api.post('/api/rebuild', { n_sims: SIMS });
             toast('Rebuilt with the new settings');
           } catch (err) { toast(String(err), true); }
           e.target.disabled = false;

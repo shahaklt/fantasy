@@ -1,5 +1,5 @@
 // ESPN league: import your real roster, and score this model against theirs.
-import { api, el, fmt, gauge, kv, led, metric, panel, posTag, table, toast } from './ui.js';
+import { api, el, fmt, gauge, kv, led, metric, panel, posTag, SIMS, table, toast } from './ui.js';
 
 const POS_COLOR = { QB: '#c4a2fc', RB: '#5eead4', WR: '#7dd3fc', TE: '#fcd34d', K: '#f0abfc', DST: '#94a3b8' };
 
@@ -242,7 +242,7 @@ async function runScorecard(evt, body) {
   const btn = evt.target;
   btn.disabled = true; btn.textContent = 'scoring';
   try {
-    const d = await api.post('/api/espn/scorecard', { n_sims: 4000 });
+    const d = await api.post('/api/espn/scorecard', { n_sims: SIMS });
     if (!d.scored) {
       body.replaceChildren(panel('Not scorable yet', el('div', { class: 'note' },
         d.note || 'No completed weeks yet.')));
@@ -343,7 +343,7 @@ async function runSync(evt, root) {
           class: 'btn primary sm', style: 'margin-top:8px',
           onclick: async (e) => {
             e.target.disabled = true; e.target.textContent = 'rebuilding';
-            try { await api.post('/api/rebuild', { n_sims: 5000 }); toast('rebuilding in the background'); }
+            try { await api.post('/api/rebuild', { n_sims: SIMS }); toast('rebuilding in the background'); }
             catch (err) { toast(String(err), true); }
           },
         }, 'Rebuild now')),
@@ -418,7 +418,7 @@ async function runWeek(evt, body) {
   const week = Number(document.getElementById('espn-week')?.value || 1);
   btn.disabled = true; btn.textContent = 'loading';
   try {
-    const d = await api.get(`/api/espn/week/${week}?n_sims=4000`);
+    const d = await api.get(`/api/espn/week/${week}?n_sims=${SIMS}`);
     const card = d.scorecard || {};
     const played = card.scored > 0;
 

@@ -178,8 +178,8 @@ pip install -e ".[dev]"     # only needed when pyproject.toml changed
 
 The package is installed editable, so code changes are live the moment you pull;
 pip only has to run when the dependency list itself moves. After a model change,
-rebuild the simulations — `gridiron build --sims 20000`, or press **Rebuild
-sims** in the web app. That re-runs the maths against data you already have.
+rebuild the simulations — `gridiron build`, or press **Rebuild sims** in the web
+app. That re-runs the maths against data you already have.
 
 To update on a different branch: `BRANCH=main ./update.sh`.
 
@@ -206,6 +206,28 @@ With the GPU active, raise the simulation count well past the default:
 ```bash
 gridiron build --sims 100000      # ~8 GB VRAM handles this comfortably
 ```
+
+### How many runs
+
+Everything defaults to **20,000 runs**, set once as `DEFAULT_SIMS` in
+`src/gridiron/config.py` — season simulations, weekly game predictions, league
+odds, market signals and the ESPN scorecard all read it, so the number in the
+readout is the number behind every screen.
+
+Monte Carlo error falls as 1/&radic;n, so 20,000 runs halves the noise of 5,000.
+That matters most where you are reading a tail rather than a mean: boom and bust
+rates, start percentages near 50%, and title odds for a middling team. Season
+means barely move.
+
+The draft recommender is the one exception, and it is deliberate. It walks the
+remainder of the draft in Python once per run *per candidate*, so a run costs
+roughly 1,200x a season run — measured at ~90 ms per run across a
+twelve-candidate slate on four cores. At 20,000 a single recommendation takes
+about half an hour, with a draft clock going. It uses `DRAFT_SIMS = 600`, which
+is what fits inside a normal pick timer, and you can override it per request.
+Raising it is a fair trade away from the clock: the candidate *ranking* is
+stable well below 600, because the gaps between candidates are usually far
+larger than the sampling noise on any one of them.
 
 The engine chunks simulations to about 35% of VRAM and keeps every array on the
 device for the whole chunk — the only transfer is the finished points matrix

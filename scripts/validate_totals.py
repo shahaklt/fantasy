@@ -57,7 +57,7 @@ def simulated_curve(res, ranks=RANKS) -> dict[str, dict[int, float]]:
     return out
 
 
-def main(n_sims: int = 2000, season: int = 2026, seasons_hist=(2023, 2024, 2025)):
+def main(n_sims: int = 20_000, season: int = 2026, seasons_hist=(2023, 2024, 2025)):
     league = LeagueSettings()
     proj = build_projections(season, league)
     inputs = build_sim_inputs(proj)

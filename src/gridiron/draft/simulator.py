@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import polars as pl
 
+from ..config import DRAFT_SIMS
 from ..scoring import SLOT_ELIGIBILITY, LeagueSettings
 from .availability import linear_picks, snake_picks
 
@@ -124,6 +125,24 @@ class DraftSimulator:
         self.starter_need = league.positional_demand()
         self._pos_limits = self._roster_limits()
 
+        # The inner loop runs once per pick per simulation — of the order of a
+        # million times for a single recommendation — so everything that does
+        # not change during a draft is computed once, here.
+        self.POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
+        code = {p: i for i, p in enumerate(self.POSITIONS)}
+        # Anything exotic lands in a spare bucket rather than crashing.
+        self.pos_idx = np.array([code.get(p, len(self.POSITIONS)) for p in self.pos],
+                                dtype=np.int64)
+        self.n_pos = len(self.POSITIONS) + 1
+        self._limits_arr = np.full(self.n_pos, 99, dtype=np.int64)
+        for pos, cap in self._pos_limits.items():
+            self._limits_arr[code[pos]] = cap
+        self._required_arr = np.array(
+            [self.league.roster.get(p, 0) for p in self.POSITIONS] + [0], dtype=np.int64)
+        # ADP order never changes, so the "next slice of the board" is a walk
+        # down a pre-sorted list rather than a fresh sort of 700 players.
+        self.adp_order = np.argsort(self.adp, kind="stable")
+
     def _roster_limits(self) -> dict[str, int]:
         """Rough cap on how many of each position a sane opponent drafts."""
         r = self.league.roster
@@ -138,22 +157,24 @@ class DraftSimulator:
         }
 
     # ------------------------------------------------------------------ core
-    def _need_multiplier(self, roster_pos: dict[str, int], picks_left: int) -> dict[str, float]:
-        """How much an opponent's roster holes distort his board."""
-        mult = {}
-        for pos in ("QB", "RB", "WR", "TE", "K", "DST"):
-            have = roster_pos.get(pos, 0)
-            limit = self._pos_limits.get(pos, 99)
-            required = self.league.roster.get(pos, 0)
-            if have >= limit:
-                mult[pos] = 0.02
+    def _need_multiplier(self, counts: np.ndarray, picks_left: int) -> np.ndarray:
+        """How much an opponent's roster holes distort his board.
+
+        Takes and returns arrays indexed by position code: the same rules as
+        before, expressed so the caller can index them with a player's position
+        instead of looking each one up by name.
+        """
+        mult = np.ones(self.n_pos)
+        late = picks_left <= 2
+        for i, pos in enumerate(self.POSITIONS):
+            have = counts[i]
+            if have >= self._limits_arr[i]:
+                mult[i] = 0.02
             elif pos in ("K", "DST"):
                 # Nobody takes a kicker early and everybody takes one at the end.
-                mult[pos] = 4.0 if picks_left <= 2 else 0.02
-            elif have < required:
-                mult[pos] = 1.6
-            else:
-                mult[pos] = 1.0
+                mult[i] = 4.0 if late else 0.02
+            elif have < self._required_arr[i]:
+                mult[i] = 1.6
         return mult
 
     def simulate_remaining(self, taken: np.ndarray, state: DraftState,
@@ -173,23 +194,29 @@ class DraftSimulator:
             if i is not None and i not in my_roster:
                 my_roster.append(i)
 
-        roster_pos: dict[int, dict[str, int]] = {}
+        # Position counts as small integer arrays: they are read and written on
+        # every pick, and dict churn dominated the profile.
+        roster_pos: dict[int, np.ndarray] = {}
         for slot, pids in state.rosters.items():
-            counts: dict[str, int] = {}
+            counts = np.zeros(self.n_pos, dtype=np.int64)
             for pid in pids:
                 i = self.index.get(pid)
                 if i is not None:
-                    counts[self.pos[i]] = counts.get(self.pos[i], 0) + 1
+                    counts[self.pos_idx[i]] += 1
             roster_pos[slot] = counts
-        mine = roster_pos.setdefault(state.my_slot, {})
+        if state.my_slot not in roster_pos:
+            roster_pos[state.my_slot] = np.zeros(self.n_pos, dtype=np.int64)
+        mine = roster_pos[state.my_slot]
         for i in (my_extra or []):
-            mine[self.pos[i]] = mine.get(self.pos[i], 0) + 1
+            mine[self.pos_idx[i]] += 1
 
         limit = max_picks if max_picks is not None else total_picks
         while pick <= min(total_picks, limit):
             slot = state.team_on_clock(pick)
-            counts = roster_pos.setdefault(slot, {})
-            picks_left = max(league.roster_size - sum(counts.values()), 0)
+            counts = roster_pos.get(slot)
+            if counts is None:
+                counts = roster_pos[slot] = np.zeros(self.n_pos, dtype=np.int64)
+            picks_left = max(league.roster_size - int(counts.sum()), 0)
 
             if slot == state.my_slot:
                 # My own future picks: take the highest projected player that
@@ -200,45 +227,46 @@ class DraftSimulator:
                 if cand is None:
                     break
                 my_roster.append(cand)
-                counts[self.pos[cand]] = counts.get(self.pos[cand], 0) + 1
+                counts[self.pos_idx[cand]] += 1
                 taken[cand] = True
             else:
                 cand = self._opponent_pick(taken, counts, picks_left, pick)
                 if cand is None:
                     break
-                counts[self.pos[cand]] = counts.get(self.pos[cand], 0) + 1
+                counts[self.pos_idx[cand]] += 1
                 taken[cand] = True
             pick += 1
         return np.asarray(my_roster, dtype=np.int64)
 
-    def _opponent_pick(self, taken: np.ndarray, counts: dict[str, int],
+    def _opponent_pick(self, taken: np.ndarray, counts: np.ndarray,
                        picks_left: int, pick: int) -> int | None:
         """Pick by noisy ADP, weighted by roster need."""
-        avail = np.flatnonzero(~taken)
-        if len(avail) == 0:
+        # Only the next slice of the board is realistically in play. Reading it
+        # off the pre-sorted ADP order costs one pass instead of a sort.
+        order = self.adp_order
+        window = order[~taken[order]][:60]
+        if len(window) == 0:
             return None
-        # Only the next slice of the board is realistically in play.
-        window = avail[np.argsort(self.adp[avail])[:60]]
         mult = self._need_multiplier(counts, picks_left)
-        pos_mult = np.array([mult.get(self.pos[i], 1.0) for i in window])
+        pos_mult = mult[self.pos_idx[window]]
         # Lower score = picked sooner. Gumbel noise scaled by the market's own
         # disagreement reproduces reaches and falls at the right frequency.
         noise = self.rng.gumbel(0.0, 1.0, size=len(window)) * self.adp_sd[window] * 0.6
         score = self.adp[window] + noise - 12.0 * np.log(np.maximum(pos_mult, 1e-3))
         return int(window[int(np.argmin(score))])
 
-    def _best_for_me(self, taken: np.ndarray, counts: dict[str, int]) -> int | None:
+    def _best_for_me(self, taken: np.ndarray, counts: np.ndarray) -> int | None:
         avail = np.flatnonzero(~taken)
         if len(avail) == 0:
             return None
-        limits = self._pos_limits
-        ok = np.array([counts.get(self.pos[i], 0) < limits.get(self.pos[i], 99) for i in avail])
+        codes = self.pos_idx[avail]
+        ok = counts[codes] < self._limits_arr[codes]
         pool = avail[ok] if ok.any() else avail
         return int(pool[int(np.argmax(self.points[pool]))])
 
     # ------------------------------------------------------------ evaluation
     def evaluate_candidates(self, state: DraftState, candidates: list[str] | None = None,
-                            n_sims: int = 200, top_k: int = 14,
+                            n_sims: int = DRAFT_SIMS, top_k: int = 14,
                             horizon: int | None = None) -> pl.DataFrame:
         """Score each candidate by the strength of the roster it leads to.
 

@@ -2,6 +2,11 @@
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+// Monte Carlo run counts. These mirror DEFAULT_SIMS and DRAFT_SIMS in
+// src/gridiron/config.py, and a test fails if the two drift apart.
+export const SIMS = 20000;
+export const DRAFT_SIMS = 600;
+
 export function el(tag, attrs = {}, ...kids) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
